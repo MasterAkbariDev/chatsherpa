@@ -17,6 +17,7 @@ screenshots/
 *.png
 !docs/**/*.png
 !extension/icons/*.png
+!extension/icons/**/*.png
 
 # OS / editors
 .DS_Store

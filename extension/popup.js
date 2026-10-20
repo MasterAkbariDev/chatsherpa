@@ -5,6 +5,27 @@
     document.getElementById("ver").textContent = "v" + chrome.runtime.getManifest().version;
   } catch (e) { /* ignore */ }
 
+  // Provider logos load from each provider's own favicon. If one can't load
+  // (offline, blocked), fall back to a colored tile with the provider's letter.
+  const TILE = { C: "#10a37f", G: "#3b7cf6", X: "#1d1d1f", D: "#4d6bfe" };
+  document.querySelectorAll(".pi img[data-fallback]").forEach((img) => {
+    const fail = () => {
+      const letter = img.getAttribute("data-fallback");
+      const span = document.createElement("span");
+      span.className = "fallback";
+      span.textContent = letter;
+      span.style.color = "#fff";
+      const tile = img.parentElement;
+      if (tile) {
+        tile.style.background = TILE[letter] || "#f4f5f8";
+        img.replaceWith(span);
+      }
+    };
+    img.addEventListener("error", fail);
+    // Already finished loading but broken (listener attached too late).
+    if (img.complete && img.naturalWidth === 0) fail();
+  });
+
   const title = document.getElementById("st-title");
   const sub = document.getElementById("st-sub");
   const dot = document.getElementById("dot");
