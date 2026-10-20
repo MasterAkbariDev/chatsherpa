@@ -32,6 +32,7 @@ python3 -m venv --help >/dev/null 2>&1 || { apt-get update -qq && apt-get instal
 command -v openssl >/dev/null || { apt-get update -qq && apt-get install -y -qq openssl; }
 
 echo "==> code -> $INSTALL_DIR"
+git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
 if [ -d "$INSTALL_DIR/.git" ]; then git -C "$INSTALL_DIR" pull -q --ff-only; else git clone -q "$REPO_URL" "$INSTALL_DIR"; fi
 cd "$INSTALL_DIR"
 
@@ -85,9 +86,27 @@ sleep 4
 echo "    service: $(systemctl is-active chatsherpa)"
 curl -fsS "http://127.0.0.1:$SERVER_PORT/healthz" && echo || echo "    health check FAILED: journalctl -u chatsherpa -n 40"
 
+if [ -n "${NGINX_SITE:-}" ] && [ -n "${NGINX_DOMAIN:-}" ]; then
+    echo "==> nginx /chatsherpa/ proxy"
+    if [ ! -f "$NGINX_SITE" ]; then
+        echo "    NGINX_SITE not found: $NGINX_SITE; skipping."
+    elif grep -q "location /chatsherpa/" "$NGINX_SITE"; then
+        echo "    already present."
+    else
+        cp -p "$NGINX_SITE" "$NGINX_SITE.bak-chatsherpa-$(date +%Y%m%d-%H%M%S)"
+        BLOCK=$'    location = /chatsherpa {\n        return 301 https://'"$NGINX_DOMAIN"$'/chatsherpa/;\n    }\n\n    location /chatsherpa/ {\n        proxy_pass http://127.0.0.1:'"$SERVER_PORT"$'/;\n        proxy_http_version 1.1;\n        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection "upgrade";\n        proxy_set_header Host $host;\n        proxy_read_timeout 3600s;\n        proxy_send_timeout 3600s;\n    }\n'
+        awk -v b="$BLOCK" '/location \/ \{/ && !d {print b; d=1} {print}' "$NGINX_SITE" > "$NGINX_SITE.tmp" && mv "$NGINX_SITE.tmp" "$NGINX_SITE"
+        if nginx -t 2>/dev/null; then systemctl reload nginx && echo "    added and reloaded."
+        else echo "    nginx test failed, rolling back."; mv "$NGINX_SITE".bak-chatsherpa-* "$NGINX_SITE"; fi
+    fi
+fi
+
 echo
 echo "Installed at $INSTALL_DIR."
 echo "Next:"
-echo "  1. Put nginx in front: see deploy/nginx-snippet.conf, then: nginx -t && systemctl reload nginx"
-echo "  2. Your bot posts to $BASE/api/login with header X-ChatSherpa-Secret"
-echo "     (read it: grep ^API_SECRET $INSTALL_DIR/.env)"
+if [ -z "${NGINX_SITE:-}" ]; then
+    echo "  1. Put nginx in front: see deploy/nginx-snippet.conf, then: nginx -t && systemctl reload nginx"
+    echo "     (or re-run with NGINX_SITE=/etc/nginx/sites-available/<file> NGINX_DOMAIN=<domain>)"
+fi
+echo "  * Your bot posts to $BASE/api/login with header X-ChatSherpa-Secret"
+echo "    (read it: grep ^API_SECRET $INSTALL_DIR/.env)"
