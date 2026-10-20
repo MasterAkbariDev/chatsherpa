@@ -1,0 +1,21 @@
+[Unit]
+Description=ChatSherpa live-view and connect login server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chatsherpa
+Group=chatsherpa
+WorkingDirectory=/opt/chatsherpa
+Environment=HOME=/opt/chatsherpa
+ExecStart=/opt/chatsherpa/.venv/bin/chatsherpa serve
+Restart=on-failure
+RestartSec=5
+MemoryMax=350M
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/chatsherpa/sessions
+
+[Install]
+WantedBy=multi-user.target

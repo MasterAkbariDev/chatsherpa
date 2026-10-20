@@ -16,6 +16,15 @@ browser.
 
 See [DEPLOY.md](docs/DEPLOY.md) covers putting the login server on a domain.
 
+## Quick start
+
+```bash
+make setup && make browsers && make check
+```
+
+The complete run guide (local setup, grabbing a session from Edge, the Telegram
+bots, the server, deploying and publishing) is in [docs/RUN.md](docs/RUN.md).
+
 ## Install
 
 ```bash
