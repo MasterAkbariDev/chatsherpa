@@ -9,12 +9,18 @@ the ``selectors=`` constructor arg if the UI changes:
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from ..base import BaseProvider
 
 
 class DeepSeekProvider(BaseProvider):
     name = "deepseek"
     home_url = "https://chat.deepseek.com/"
+
+    @classmethod
+    def is_conversation(cls, url: str) -> bool:
+        return "/a/chat/" in urlparse(url).path
 
     # Composer is a plain <textarea> with placeholder "Message DSeek" (the old
     # #chat-input id is gone). Enter submits, so no send button is needed.
@@ -23,8 +29,8 @@ class DeepSeekProvider(BaseProvider):
     send_button_selector = None
     # Assistant markdown lives in `.ds-markdown`; user turns don't use it.
     assistant_message_selector = ".ds-markdown"
-    # DeepSeek exposes DeepThink/Search toggles rather than a model picker,
-    # so model selection is not wired for this provider.
+    # DeepSeek has no stable model-picker selector. list_models still looks
+    # for a popup whose label mentions "model".
     login_wall_selectors = [
         'input[type="password"]',
         'text="Log in"',

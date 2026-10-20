@@ -45,10 +45,19 @@ class SessionStore(ABC):
     @abstractmethod
     async def list(self) -> List[Tuple[str, str]]: ...
 
+    async def get_thread(self, user_id: Union[str, int], provider: str) -> Optional[str]:
+        """Last conversation URL for this user and provider, if one was saved."""
+        return None
+
+    async def put_thread(self, user_id: Union[str, int], provider: str, url: str) -> None:
+        """Remember ``url`` so the next ask continues that chat."""
+        return None
+
 
 class MemorySessionStore(SessionStore):
     def __init__(self) -> None:
         self._data: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._threads: Dict[Tuple[str, str], str] = {}
 
     async def get(self, user_id, provider):
         state = self._data.get((_slug(user_id), provider.lower()))
@@ -62,6 +71,12 @@ class MemorySessionStore(SessionStore):
 
     async def list(self):
         return [(u, p) for (u, p) in self._data]
+
+    async def get_thread(self, user_id, provider):
+        return self._threads.get((_slug(user_id), provider.lower()))
+
+    async def put_thread(self, user_id, provider, url):
+        self._threads[(_slug(user_id), provider.lower())] = url
 
 
 class FileSessionStore(SessionStore):
@@ -114,8 +129,24 @@ class FileSessionStore(SessionStore):
         else:
             p.write_bytes(data)
 
+    def _thread_path(self, user_id, provider) -> Path:
+        provider = provider.lower()
+        name = provider if _slug(user_id) == DEFAULT_USER else f"{provider}.{_slug(user_id)}"
+        return self.dir / f"{name}.thread"
+
+    async def get_thread(self, user_id, provider):
+        p = self._thread_path(user_id, provider)
+        if not p.exists():
+            return None
+        url = p.read_text("utf-8").strip()
+        return url or None
+
+    async def put_thread(self, user_id, provider, url):
+        self._thread_path(user_id, provider).write_text(url.strip() + "\n", encoding="utf-8")
+
     async def delete(self, user_id, provider):
-        for p in (self.path_for(user_id, provider), self._plain_path(user_id, provider)):
+        for p in (self.path_for(user_id, provider), self._plain_path(user_id, provider),
+                  self._thread_path(user_id, provider)):
             if p.exists():
                 p.unlink()
 

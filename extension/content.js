@@ -11,15 +11,39 @@ function readConfig() {
   }
 }
 
-function reply(ok, error) {
-  window.dispatchEvent(new CustomEvent("chatsherpa:captured", { detail: { ok, error } }));
+function reply(ok, error, extra) {
+  window.dispatchEvent(new CustomEvent("chatsherpa:captured", {
+    detail: Object.assign({ ok: ok, error: error }, extra || {}),
+  }));
 }
+
+function send(type, cfg, again, done) {
+  chrome.runtime.sendMessage({ type: type, config: cfg }, (resp) => {
+    const err = chrome.runtime.lastError;
+    // The worker may have been asleep and dropped the first message.
+    if (err && !again) return setTimeout(() => send(type, cfg, true, done), 400);
+    if (err) return done({ ok: false, error: err.message });
+    done(resp || { ok: false, error: "no response" });
+  });
+}
+
+window.addEventListener("chatsherpa:accounts", () => {
+  const cfg = readConfig();
+  if (!cfg || !cfg.token) {
+    window.dispatchEvent(new CustomEvent("chatsherpa:account-list", {
+      detail: { ok: false, error: "missing config" },
+    }));
+    return;
+  }
+  send("chatsherpa-accounts", cfg, false, (resp) => {
+    window.dispatchEvent(new CustomEvent("chatsherpa:account-list", { detail: resp }));
+  });
+});
 
 window.addEventListener("chatsherpa:capture", () => {
   const cfg = readConfig();
   if (!cfg || !cfg.token) return reply(false, "missing config");
-  chrome.runtime.sendMessage({ type: "chatsherpa-capture", config: cfg }, (resp) => {
-    if (chrome.runtime.lastError) return reply(false, chrome.runtime.lastError.message);
-    reply(!!(resp && resp.ok), resp && resp.error);
+  send("chatsherpa-capture", cfg, false, (resp) => {
+    reply(!!resp.ok, resp.error, resp);
   });
 });

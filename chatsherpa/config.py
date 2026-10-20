@@ -12,6 +12,26 @@ from pathlib import Path
 from typing import Dict, Optional
 
 
+def app_home() -> Path:
+    """Directory that holds ``.env`` and ``sessions``, independent of cwd.
+
+    ``CHATSHERPA_HOME`` wins. Otherwise an editable install (this repo, or
+    ``/opt/chatsherpa``) is used, then a parent of the working directory that
+    already contains ``.env`` or ``sessions``.
+    """
+    override = os.environ.get("CHATSHERPA_HOME")
+    if override:
+        return Path(override).expanduser().resolve()
+    root = Path(__file__).resolve().parents[1]
+    if (root / "pyproject.toml").exists() and (root / "chatsherpa").is_dir():
+        return root
+    cwd = Path.cwd().resolve()
+    for candidate in (cwd, *cwd.parents):
+        if (candidate / ".env").exists() or (candidate / "sessions").is_dir():
+            return candidate
+    return cwd
+
+
 def load_env(path: str = ".env") -> Dict[str, str]:
     """Parse a .env file into a dict (does not mutate os.environ)."""
     data: Dict[str, str] = {}

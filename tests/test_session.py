@@ -68,3 +68,17 @@ def test_cookies_for_fills_domain_from_url():
 
 def test_empty_session():
     assert Session().is_empty()
+
+
+def test_replay_drops_cloudflare_cookies():
+    s = Session.from_storage_state({
+        "cookies": [
+            {"name": "cf_clearance", "value": "x", "domain": ".chatgpt.com", "path": "/"},
+            {"name": "__cf_bm", "value": "y", "domain": ".chatgpt.com", "path": "/"},
+            {"name": "aws-waf-token", "value": "w", "domain": ".deepseek.com", "path": "/"},
+            {"name": "session", "value": "t", "domain": ".chatgpt.com", "path": "/"},
+        ],
+        "origins": [],
+    })
+    names = [c["name"] for c in s.storage_state_arg()["cookies"]]
+    assert names == ["session"]

@@ -15,7 +15,8 @@ from typing import Dict, Optional, Tuple, Type
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
-from .base import _DEFAULT_UA, BaseProvider, ProviderConfig
+from .base import BaseProvider, ProviderConfig
+from .display import VirtualDisplay
 from .session import Session
 
 log = logging.getLogger("chatsherpa.pool")
@@ -59,6 +60,7 @@ class BrowserPool:
         self.config.headless = headless
         self._pw: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
+        self._display = VirtualDisplay()
         self._entries: Dict[Tuple[str, str], _Entry] = {}
         self._sem = asyncio.Semaphore(max_concurrency)
         self._start_lock = asyncio.Lock()
@@ -67,11 +69,19 @@ class BrowserPool:
         async with self._start_lock:
             if self._browser:
                 return
+            # Start Xvfb before the Playwright driver. The driver copies the
+            # environment when it starts, so DISPLAY set afterwards never
+            # reaches Chrome. Headless Chromium is stopped by Cloudflare here.
+            launch_headless = self.headless
+            if self.headless and self._display.start_if_needed():
+                launch_headless = False
             self._pw = await async_playwright().start()
             self._browser = await self._pw.chromium.launch(
-                headless=self.headless, args=self.config.launch_args
+                headless=launch_headless,
+                args=[*self.config.launch_args, "--disable-blink-features=AutomationControlled"],
+                ignore_default_args=["--enable-automation"],
             )
-            log.info("browser pool started (headless=%s)", self.headless)
+            log.info("browser pool started (headless=%s)", launch_headless)
 
     async def close(self) -> None:
         for entry in self._entries.values():
@@ -84,27 +94,29 @@ class BrowserPool:
             await self._browser.close()
         if self._pw:
             await self._pw.stop()
+        self._display.stop()
         self._pw = self._browser = None
 
     async def lease(self, provider_cls: Type[BaseProvider], session: Session,
-                    user_id: str) -> _Lease:
+                    user_id: str, start_url: Optional[str] = None) -> _Lease:
         await self.start()
         key = (str(user_id), provider_cls.name)
         entry = self._entries.get(key)
         if entry is None:
-            entry = await self._make_entry(provider_cls, session)
+            entry = await self._make_entry(provider_cls, session, start_url)
             self._entries[key] = entry
             await self._evict_if_needed()
         return _Lease(self, key, entry, provider_cls)
 
-    async def _make_entry(self, provider_cls: Type[BaseProvider], session: Session) -> _Entry:
+    async def _make_entry(self, provider_cls: Type[BaseProvider], session: Session,
+                          start_url: Optional[str] = None) -> _Entry:
         assert self._browser is not None
-        ctx_kwargs: dict = {
-            "user_agent": self.config.user_agent or _DEFAULT_UA,
-            "locale": self.config.locale,
-        }
-        if self.config.viewport:
-            ctx_kwargs["viewport"] = self.config.viewport
+        ctx_kwargs: dict = {}
+        if self.config.user_agent:
+            ctx_kwargs["user_agent"] = self.config.user_agent
+        if self.config.locale:
+            ctx_kwargs["locale"] = self.config.locale
+        ctx_kwargs["viewport"] = self.config.viewport or {"width": 1280, "height": 800}
         storage = session.storage_state_arg()
         if storage is not None:
             ctx_kwargs["storage_state"] = storage
@@ -114,8 +126,16 @@ class BrowserPool:
         if cookies:
             await context.add_cookies(cookies)
         page = await context.new_page()
-        await page.goto(provider_cls.home_url, wait_until="domcontentloaded",
-                        timeout=self.config.nav_timeout_ms)
+        target = start_url if start_url and provider_cls.entry_url(start_url) else provider_cls.home_url
+        try:
+            await page.goto(target, wait_until="domcontentloaded",
+                            timeout=self.config.nav_timeout_ms)
+        except Exception:
+            if target == provider_cls.home_url:
+                raise
+            log.info("saved chat %s did not open; starting a new one", target)
+            await page.goto(provider_cls.home_url, wait_until="domcontentloaded",
+                            timeout=self.config.nav_timeout_ms)
         await provider_cls.attach(page, self.config)._after_load()
         return _Entry(context, page)
 

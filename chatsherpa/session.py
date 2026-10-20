@@ -24,6 +24,19 @@ from .exceptions import SessionError
 
 SessionSource = Union["Session", str, Path, dict, list, None]
 
+# Bound to the IP and browser that solved the challenge. Replaying them from
+# another machine makes the provider show a logged-out or challenge page.
+_REPLAY_SKIP = {"cf_clearance", "__cf_bm", "aws-waf-token"}
+
+
+def prepare_storage_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy a storageState, dropping cookies that must not be replayed."""
+    cookies = [
+        dict(c) for c in (state.get("cookies") or [])
+        if c.get("name") and c.get("name") not in _REPLAY_SKIP
+    ]
+    return {"cookies": cookies, "origins": list(state.get("origins") or [])}
+
 
 def _normalize_cookie(raw: Dict[str, Any], default_domain: Optional[str]) -> Dict[str, Any]:
     """Coerce a loosely-shaped cookie dict into Playwright's expected form."""
@@ -161,7 +174,7 @@ class Session:
         if self.storage_state_path and Path(self.storage_state_path).exists():
             return self.storage_state_path
         if self.storage_state:
-            return self.storage_state
+            return prepare_storage_state(self.storage_state)
         return None
 
     def cookies_for(self, url: str) -> List[Dict[str, Any]]:
@@ -172,6 +185,8 @@ class Session:
         host = urlparse(url).hostname
         out: List[Dict[str, Any]] = []
         for c in self.cookies:
+            if c.get("name") in _REPLAY_SKIP:
+                continue
             c = dict(c)
             if "url" not in c and "domain" not in c and host:
                 c["domain"] = host
@@ -189,9 +204,11 @@ class Session:
         and reused the same way a captured storageState is.
         """
         if self.storage_state:
-            return self.storage_state
+            return prepare_storage_state(self.storage_state)
         cookies: List[Dict[str, Any]] = []
         for c in self.cookies:
+            if c.get("name") in _REPLAY_SKIP:
+                continue
             domain = c.get("domain", "")
             if not domain and c.get("url"):
                 domain = urlparse(c["url"]).hostname or ""

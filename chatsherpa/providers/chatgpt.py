@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
+from urllib.parse import urlparse
+
 from ..base import BaseProvider
 
 
@@ -9,15 +13,22 @@ class ChatGPTProvider(BaseProvider):
     name = "chatgpt"
     home_url = "https://chatgpt.com/"
 
-    # The composer is a ProseMirror contenteditable div (the #prompt-textarea id
-    # was dropped in 2025 — match the class, keep the old id as a fallback).
-    input_selector = 'div.ProseMirror[contenteditable="true"], #prompt-textarea'
+    @classmethod
+    def is_conversation(cls, url: str) -> bool:
+        return urlparse(url).path.startswith("/c/")
+
+    # The logged-out marketing page also renders a composer, so login is decided
+    # by the session endpoint / profile button below — not by this field existing.
+    input_selector = (
+        '#prompt-textarea, div.ProseMirror[contenteditable="true"], '
+        '[data-testid="prompt-textarea"], textarea[name="prompt-textarea"], '
+        '[contenteditable="true"][data-lexical-editor="true"]'
+    )
     input_is_contenteditable = True
     send_button_selector = 'button[data-testid="send-button"], #composer-submit-button'
     # Legacy selector kept only as a fallback; the real read is JS-based below.
     assistant_message_selector = '[data-message-author-role="assistant"]'
     streaming_indicator_selector = 'button[data-testid="stop-button"], button[aria-label="Stop streaming"]'
-    # Model picker (e.g. GPT-5, GPT-4o, …).
     model_picker_selector = '[data-testid="model-switcher-dropdown-button"]'
 
     # ChatGPT's turn markup is obfuscated (no stable data-role/class). The one
@@ -50,10 +61,44 @@ class ChatGPTProvider(BaseProvider):
             return (await self.page.evaluate(self._TEXT_JS)).strip()
         except Exception:
             return ""
+
+    # Copy appears on a turn only after generation finishes. A hidden stop
+    # button left in the DOM must not keep the CLI waiting.
+    _TURN_DONE_JS = """() => {
+        const labels = [...document.querySelectorAll('.sr-only')]
+            .filter(h => h.textContent.trim().startsWith('ChatGPT said:'));
+        if (!labels.length) return false;
+        const turn = labels[labels.length - 1].closest('[data-turn-key]')
+            || labels[labels.length - 1].parentElement;
+        if (!turn) return false;
+        const copy = turn.querySelector(
+            '[data-testid="copy-turn-action-button"], button[aria-label="Copy"]'
+        );
+        if (!copy) return false;
+        const r = copy.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    }"""
+
+    async def _response_ready(self) -> bool:
+        try:
+            return bool(await self.page.evaluate(self._TURN_DONE_JS))
+        except Exception:
+            return False
     login_wall_selectors = [
         'button[data-testid="login-button"]',
-        'a[href*="auth/login"]',
     ]
+    # Present on the signed-in app, not on the logged-out landing page.
+    _AUTHED_UI = '[data-testid="profile-button"], nav[aria-label="Chat history"]'
+    _SESSION_JS = """async () => {
+        try {
+            const res = await fetch('/api/auth/session', { credentials: 'include' });
+            if (!res.ok) return false;
+            const data = await res.json();
+            return !!(data && data.user);
+        } catch (e) {
+            return false;
+        }
+    }"""
 
     # Experimental auto-login (OpenAI auth flow). CAPTCHAs are common.
     login_trigger_selector = '[data-testid="login-button"]'
@@ -61,6 +106,31 @@ class ChatGPTProvider(BaseProvider):
     email_submit_selector = 'button[type="submit"], input[type="submit"]'
     password_input_selector = 'input[type="password"], input[name="password"]'
     password_submit_selector = 'button[type="submit"], input[type="submit"]'
+
+    async def _visible(self, selector: str) -> bool:
+        try:
+            return await self.page.locator(selector).first.is_visible()
+        except Exception:
+            return False
+
+    async def is_logged_in(self) -> bool:
+        """Signed in when the session API returns a user, or the app shell is up.
+
+        The logged-out page shows a login button immediately, including while a
+        valid session is still hydrating, so that button is not a final answer.
+        """
+        deadline = time.monotonic() + max(self.config.login_wait_ms, 20_000) / 1000
+        while True:
+            try:
+                if await self.page.evaluate(self._SESSION_JS):
+                    return True
+            except Exception:
+                pass
+            if await self._visible(self._AUTHED_UI):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.5)
 
     async def _after_load(self) -> None:
         page = self.page

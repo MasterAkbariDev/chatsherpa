@@ -2,12 +2,14 @@
 
     chatsherpa                      banner + command overview
     chatsherpa providers            list providers
+    chatsherpa models [provider]    list model names for --model
     chatsherpa doctor               environment diagnostics
     chatsherpa login <provider>     headful login, saves a session
     chatsherpa ask <provider> "…"   send a prompt, print the reply
     chatsherpa test [all|<p>]       smoke-test provider sessions
     chatsherpa sessions             list stored sessions
     chatsherpa setup                configure the login-server domain
+    chatsherpa link <provider>      create a login link from API_SECRET in .env
     chatsherpa serve                run the live-view login server
 """
 
@@ -15,35 +17,49 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import re
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Dict, List
 
 from .base import ProviderConfig
 from .client import ChatSherpa
-from .config import load_env, resolve
+from .config import app_home, load_env, resolve
 from .providers import REGISTRY, get_provider
 from .store import FileSessionStore
 from . import ui
 from .ui import console
 
-SESS_DIR = "sessions"
 SMOKE = "Reply with exactly: ok"
 
 
+def _home() -> Path:
+    return app_home()
+
+
+def _env_path() -> Path:
+    return _home() / ".env"
+
+
+def _sessions_dir() -> Path:
+    return _home() / "sessions"
+
+
 def _env() -> Dict[str, str]:
-    e = dict(load_env(".env"))
+    e = dict(load_env(str(_env_path())))
     e.update({k: v for k, v in os.environ.items() if k in (
-        "PUBLIC_BASE_URL", "SERVER_HOST", "SERVER_PORT", "API_SECRET",
+        "PUBLIC_BASE_URL", "SERVER_HOST", "SERVER_PORT", "API_SECRET", "API_KEY",
         "WEBHOOK_URL", "WEBHOOK_SECRET", "ENCRYPTION_KEY", "CHATSHERPA_HEADLESS")})
     return e
 
 
 def _store() -> FileSessionStore:
-    return FileSessionStore(SESS_DIR, encryption_key=_env().get("ENCRYPTION_KEY") or None)
+    return FileSessionStore(_sessions_dir(), encryption_key=_env().get("ENCRYPTION_KEY") or None)
 
 
 def _bridge(headless: bool = True) -> ChatSherpa:
@@ -76,7 +92,9 @@ def cmd_overview() -> int:
     t.add_column("what it does", style=ui.SOFT)
     rows = [
         ("chatsherpa setup", "configure your login-server domain (+ reverse-proxy help)"),
+        ("chatsherpa link <provider>", "create a login link (API_SECRET from .env)"),
         ("chatsherpa login <provider>", "open a browser, log in once, save the session"),
+        ("chatsherpa models [provider]", "read model names from the signed-in account"),
         ("chatsherpa ask <provider> \"…\"", "send a prompt and print the reply"),
         ("chatsherpa test [all]", "smoke-test stored sessions"),
         ("chatsherpa sessions", "list saved sessions"),
@@ -88,6 +106,45 @@ def cmd_overview() -> int:
     console.print(t)
     console.print(f"[{ui.SOFT}]providers:[/]  " +
                   "  ".join(f"[{ui.pstyle(p)}]●[/] {p}" for p in sorted(REGISTRY)))
+    return 0
+
+
+async def cmd_models(args) -> int:
+    from rich.table import Table
+    from rich import box
+    names = [args.provider] if getattr(args, "provider", None) else sorted(REGISTRY)
+    account = getattr(args, "account", None)
+    bridge = _bridge(headless=not getattr(args, "headful", False))
+    rows = []
+    example = None
+    try:
+        for name in names:
+            style = ui.pstyle(name)
+            try:
+                with console.status(f"[{style}]Reading {name} models…", spinner="dots"):
+                    found = await bridge.list_models(
+                        name, "local", account=account if name == "gemini" else None)
+            except Exception as exc:
+                rows.append((name, style, str(exc)))
+                continue
+            labels = found.get("models") or []
+            used = found.get("account")
+            who = f" u/{used}" if used is not None else ""
+            shown = ", ".join(labels) if labels else "no model picker"
+            rows.append((f"{name}{who}", style, shown))
+            if labels and example is None:
+                example = (name, labels[0])
+    finally:
+        await bridge.aclose()
+    from rich.markup import escape
+    t = Table(title="Models", box=box.ROUNDED, title_style=f"bold {ui.TEAL}")
+    t.add_column("provider")
+    t.add_column("pass to --model", style=ui.SOFT)
+    for name, style, shown in rows:
+        t.add_row(f"[{style}]●[/] {escape(name)}", escape(shown))
+    console.print(t)
+    if example:
+        console.print(f"[{ui.SOFT}]example:[/] chatsherpa ask {example[0]} \"hello\" --model \"{example[1]}\"")
     return 0
 
 
@@ -130,7 +187,8 @@ def cmd_doctor() -> int:
         env = _env()
         checks.append(("Login domain (PUBLIC_BASE_URL)", "ok" if env.get("PUBLIC_BASE_URL") else "warn",
                        env.get("PUBLIC_BASE_URL") or "run: chatsherpa setup"))
-        sess = list(Path(SESS_DIR).glob("*.json*")) if Path(SESS_DIR).exists() else []
+        sess_dir = _sessions_dir()
+        sess = list(sess_dir.glob("*.json*")) if sess_dir.exists() else []
         checks.append(("Saved sessions", "ok" if sess else "warn",
                        f"{len(sess)} found" if sess else "run: chatsherpa login <provider>"))
 
@@ -145,7 +203,7 @@ def cmd_doctor() -> int:
 
 async def cmd_login(args) -> int:
     provider_cls = get_provider(args.provider)
-    creds = resolve(args.provider)
+    creds = resolve(args.provider, env_path=str(_env_path()))
     email = creds.email if args.auto else None
     password = creds.password if args.auto else None
     bridge = _bridge(headless=args.headless)
@@ -157,7 +215,8 @@ async def cmd_login(args) -> int:
         console.print(msg)
         with console.status(f"[{style}]Waiting for login — catching session…", spinner="aesthetic"):
             try:
-                await bridge.login_local(provider_cls.name, email=email, password=password,
+                await bridge.login_local(provider_cls.name, user_id=getattr(args, "user", None) or "local",
+                                         email=email, password=password,
                                          headless=args.headless, timeout_s=args.timeout)
             except Exception as exc:
                 ui.fail(f"login failed: {exc}")
@@ -178,17 +237,19 @@ async def cmd_ask(args) -> int:
     order = [m.strip() for m in args.model_order.split(",")] if getattr(args, "model_order", None) else None
     try:
         with console.status(f"[{style}]{provider_cls.name} is thinking…", spinner="dots"):
-            answer = await bridge.ask(provider_cls.name, "local", args.prompt,
-                                      model=getattr(args, "model", None), model_order=order)
+            answer = await bridge.ask(provider_cls.name, getattr(args, "user", None) or "local", args.prompt,
+                                      model=getattr(args, "model", None), model_order=order,
+                                      new_chat=getattr(args, "new", False),
+                                      account=getattr(args, "account", None))
     except Exception as exc:
         ui.fail(str(exc))
-        return 2
-    finally:
         await bridge.aclose()
+        return 2
     from rich.panel import Panel
     from rich.markdown import Markdown
     console.print(Panel(Markdown(answer), title=str(ui.chip(provider_cls.name)),
                         border_style=style, title_align="left"))
+    await bridge.aclose()
     return 0
 
 
@@ -256,7 +317,7 @@ async def cmd_import(args) -> int:
     if not n:
         ui.fail("no usable cookies found in that source")
         return 2
-    await _store().put("local", provider_cls.name, state)
+    await _store().put(getattr(args, "user", None) or "local", provider_cls.name, state)
     from rich.panel import Panel
     console.print(Panel(f"[{ui.GOOD}]✓ imported {n} cookies[/] for [{style}]{provider_cls.name}[/]\n"
                         f"[{ui.SOFT}]try:[/] chatsherpa ask {provider_cls.name} \"hello\"",
@@ -296,7 +357,7 @@ async def cmd_grab(args) -> int:
         console.print(Panel(f"[{ui.GOOD}]✓ captured {n} cookies and uploaded[/] for "
                             f"[{style}]{provider_cls.name}[/]", border_style=ui.GOOD, title="Connected"))
     else:
-        await _store().put("local", provider_cls.name, state)
+        await _store().put(getattr(args, "user", None) or "local", provider_cls.name, state)
         console.print(Panel(f"[{ui.GOOD}]✓ captured {n} cookies[/] for [{style}]{provider_cls.name}[/]\n"
                             f"[{ui.SOFT}]try:[/] chatsherpa ask {provider_cls.name} \"hello\"",
                             border_style=ui.GOOD, title="Connected"))
@@ -309,7 +370,7 @@ async def cmd_sessions(args) -> int:
     store = _store()
     rows = await store.list()
     t = Table(title="Stored sessions", box=box.ROUNDED, title_style=f"bold {ui.TEAL}")
-    t.add_column("provider"); t.add_column("user"); t.add_column("age", style=ui.SOFT); t.add_column("enc", style=ui.SOFT)
+    t.add_column("provider"); t.add_column("account"); t.add_column("age", style=ui.SOFT); t.add_column("enc", style=ui.SOFT)
     if not rows:
         console.print(f"[{ui.SOFT}]no sessions yet — run[/] chatsherpa login <provider>")
         return 0
@@ -323,6 +384,76 @@ async def cmd_sessions(args) -> int:
         enc = "🔒" if p.suffix == ".enc" else "—"
         t.add_row(f"[{ui.pstyle(prov)}]●[/] {prov}", user, age, enc)
     console.print(t)
+    return 0
+
+
+async def cmd_remove(args) -> int:
+    """Delete a stored session (token) for a provider, per account or all."""
+    store = _store()
+    provider = get_provider(args.provider).name
+    rows = await store.list()
+    label = getattr(args, "user", None) or "local"
+    if args.all:
+        targets = sorted({u for (u, p) in rows if p == provider})
+    else:
+        targets = [label] if (label, provider) in rows else []
+    if not targets:
+        ui.warn(f"no stored session for {provider}"
+                + ("" if args.all else f" (account '{label}')"))
+        return 1
+    for user in targets:
+        await store.delete(user, provider)
+        ui.ok(f"removed {provider} (account '{user}')")
+    return 0
+
+
+def request_login_link(base_url: str, api_secret: str, provider: str,
+                       user_id: str = "local", mode: str = "connect") -> dict:
+    """POST /api/login and return the server's JSON (includes ``url``)."""
+    body = json.dumps({"provider": provider, "user_id": user_id, "mode": mode}).encode()
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/api/login",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "chatsherpa",
+            "X-ChatSherpa-Secret": api_secret,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def cmd_link(args) -> int:
+    """Create a connect (or live) login link using the secret already in .env."""
+    from rich.panel import Panel
+    env = _env()
+    base = (env.get("PUBLIC_BASE_URL") or "").rstrip("/")
+    secret = env.get("API_SECRET") or env.get("API_KEY")
+    if not base:
+        ui.fail("no PUBLIC_BASE_URL. Run: chatsherpa setup")
+        return 1
+    if not secret:
+        ui.fail("no API_SECRET (or API_KEY) in the environment or .env")
+        return 1
+    mode = "live" if args.live else "connect"
+    try:
+        info = request_login_link(base, secret, args.provider, args.user, mode)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:180]
+        ui.fail(f"login server returned {exc.code}: {detail}")
+        return 1
+    except Exception as exc:
+        ui.fail(f"could not create a link: {exc}")
+        return 1
+    url = info.get("url")
+    if not url:
+        ui.fail("the server did not return a link")
+        return 1
+    console.print(Panel(
+        f"[{ui.TEAL}]{url}[/]\n[{ui.SOFT}]{mode} · user {args.user} · expires in {info.get('expires_in', '?')}s[/]",
+        title=f"login link · {args.provider}", border_style=ui.TEAL))
     return 0
 
 
@@ -342,7 +473,7 @@ def cmd_setup(args) -> int:
     updates = {"PUBLIC_BASE_URL": base, "SERVER_HOST": host, "SERVER_PORT": port}
     if api_secret:
         updates["API_SECRET"] = api_secret
-    upsert_env(updates)
+    upsert_env(updates, path=str(_env_path()))
     ui.ok("wrote PUBLIC_BASE_URL and server settings to .env")
 
     if base.startswith("http://") or re.match(r"https?://\d+\.\d+\.\d+\.\d+", base):
@@ -402,18 +533,31 @@ def build_parser() -> argparse.ArgumentParser:
     provs = sorted(REGISTRY)
 
     sub.add_parser("providers")
+    md = sub.add_parser("models", help="read model names from the signed-in account")
+    md.add_argument("provider", nargs="?", choices=provs)
+    md.add_argument("--account", type=int, help="Gemini account slot, 0 is the first signed-in account")
+    md.add_argument("--headful", action="store_true")
     sub.add_parser("doctor")
     sub.add_parser("sessions")
     sub.add_parser("setup")
     sub.add_parser("serve")
 
+    ln = sub.add_parser("link", help="create a login link using API_SECRET from .env")
+    ln.add_argument("provider", choices=provs)
+    ln.add_argument("--user", default="local", help="user id the session is stored under")
+    ln.add_argument("--live", action="store_true", help="server browser instead of connect mode")
+
     lg = sub.add_parser("login"); lg.add_argument("provider", choices=provs)
     lg.add_argument("--auto", action="store_true"); lg.add_argument("--headless", action="store_true")
+    lg.add_argument("--user", default="local", help="account label to store under (default: local)")
     lg.add_argument("--timeout", type=int, default=300)
 
     ak = sub.add_parser("ask"); ak.add_argument("provider", choices=provs); ak.add_argument("prompt")
     ak.add_argument("--headful", action="store_true"); ak.add_argument("--timeout", type=int, default=180)
-    ak.add_argument("--model", help="preferred model (e.g. Expert, '2.5 Pro')")
+    ak.add_argument("--user", default="local", help="account label to use (default: local)")
+    ak.add_argument("--new", action="store_true", help="start a new chat instead of continuing the last one")
+    ak.add_argument("--account", type=int, help="Gemini account slot: 0 is the main Google account, 1 the next")
+    ak.add_argument("--model", help="preferred model (e.g. Expert, '3.1 Pro')")
     ak.add_argument("--model-order", help="comma-separated model preference order")
 
     ts = sub.add_parser("test"); ts.add_argument("provider", nargs="?", default="all")
@@ -424,18 +568,27 @@ def build_parser() -> argparse.ArgumentParser:
     gb.add_argument("--profile", help="persistent profile dir (when not using --cdp)")
     gb.add_argument("--token", help="connect token (to upload to a login server)")
     gb.add_argument("--server", help="login server base url (with --token)")
+    gb.add_argument("--user", default="local", help="account label to store under (default: local)")
     gb.add_argument("--timeout", type=int, default=300)
 
     im = sub.add_parser("import"); im.add_argument("provider", choices=provs)
     im.add_argument("source", help="cookie JSON file, storageState file, '-' for stdin, or a cookie header with --cookie-header")
     im.add_argument("--cookie-header", action="store_true", help="treat source as a raw 'k=v; k2=v2' string")
     im.add_argument("--domain", help="domain for --cookie-header (default: provider home)")
+    im.add_argument("--user", default="local", help="account label to store under (default: local)")
+
+    rm = sub.add_parser("remove", help="delete a stored session (token) for a provider/account")
+    rm.add_argument("provider", choices=provs)
+    rm.add_argument("--user", default="local", help="account label to remove (default: local)")
+    rm.add_argument("--all", action="store_true", help="remove every stored account for this provider")
     return p
 
 
-SYNC = {"providers": cmd_providers, "doctor": cmd_doctor, "setup": cmd_setup, "serve": cmd_serve}
+SYNC = {"providers": cmd_providers, "doctor": cmd_doctor, "setup": cmd_setup,
+        "serve": cmd_serve, "link": cmd_link}
 ASYNC = {"login": cmd_login, "ask": cmd_ask, "test": cmd_test,
-         "sessions": cmd_sessions, "import": cmd_import, "grab": cmd_grab}
+         "sessions": cmd_sessions, "import": cmd_import, "grab": cmd_grab,
+         "models": cmd_models, "remove": cmd_remove}
 
 
 def main(argv=None) -> int:

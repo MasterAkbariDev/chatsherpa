@@ -24,10 +24,95 @@ from playwright.async_api import (
     async_playwright,
 )
 
+from .display import VirtualDisplay
 from .exceptions import LoginRequiredError, RateLimitedError, ResponseTimeoutError
 from .session import Session, SessionSource
 
 log = logging.getLogger("chatsherpa")
+
+_MORE_MODELS = re.compile(r"more models|see all models|show all", re.I)
+_SKIP_MODEL = re.compile(
+    r"^(upgrade|get plus|get pro|see plans|learn more|settings|help|sign out|log out|new chat|temporary chat)$",
+    re.I,
+)
+
+_GENERIC_PICKER_JS = """() => {
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return r.width > 2 && r.height > 2 && s.visibility !== "hidden" && s.display !== "none";
+  };
+  const nodes = document.querySelectorAll('[aria-haspopup="menu"], [aria-haspopup="listbox"]');
+  for (const el of nodes) {
+    if (!visible(el)) continue;
+    const name = ((el.getAttribute("aria-label") || "") + " " + (el.innerText || "")).trim();
+    const hint = name + " " + (typeof el.className === "string" ? el.className : "") + " " + (el.id || "");
+    if (!/model/i.test(hint)) continue;
+    if (/settings|help|account|sidebar|new chat/i.test(name)) continue;
+    return el;
+  }
+  return null;
+}"""
+
+_READ_MODELS_JS = """({optionSelector, pickerSelector}) => {
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return r.width > 2 && r.height > 2 && s.visibility !== "hidden" && s.display !== "none";
+  };
+  const firstLine = (el) => {
+    const aria = (el.getAttribute("aria-label") || "").trim();
+    const raw = aria || el.innerText || "";
+    return (raw.split(/\\n/).map((s) => s.trim()).filter(Boolean)[0] || "");
+  };
+  const pushFrom = (root, selector, out) => {
+    const visit = (node) => {
+      if (!node || !node.querySelectorAll) return;
+      let found = [];
+      try { found = [...node.querySelectorAll(selector)]; } catch (e) { found = []; }
+      for (const el of found) {
+        if (!visible(el)) continue;
+        const line = firstLine(el);
+        if (line) out.push(line);
+      }
+      let all = [];
+      try { all = [...node.querySelectorAll("*")]; } catch (e) { all = []; }
+      for (const el of all) if (el.shadowRoot) visit(el.shadowRoot);
+    };
+    visit(root);
+  };
+  const labels = [];
+  pushFrom(document, optionSelector, labels);
+  if (!labels.length) {
+    const panes = [...document.querySelectorAll(
+      '[role="menu"], [role="listbox"], [role="dialog"], .cdk-overlay-pane, mat-menu-content'
+    )].filter(visible);
+    const pane = panes[panes.length - 1];
+    if (pane) pushFrom(pane, "button, [role='option'], [role='menuitem'], a", labels);
+  }
+  if (!labels.length && pickerSelector) {
+    const picker = document.querySelector(pickerSelector);
+    const root = picker && (picker.shadowRoot || picker);
+    if (root) pushFrom(root, "button, [role='option'], [role='menuitem']", labels);
+  }
+  return labels;
+}"""
+
+
+def clean_model_labels(raw: List[str]) -> List[str]:
+    """Keep the short names a model menu actually offers."""
+    seen = set()
+    labels: List[str] = []
+    for item in raw:
+        label = re.sub(r"^model:\s*", "", (item or "").strip(), flags=re.I).strip()
+        if not label or len(label) > 48 or _SKIP_MODEL.match(label):
+            continue
+        key = label.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        labels.append(label)
+    return labels
 
 
 @dataclass
@@ -45,24 +130,23 @@ class ProviderConfig:
     response_timeout_ms: int = 180_000
     login_wait_ms: int = 8_000
 
-    # A response is "done" once its text stops changing for this long.
-    stability_window_ms: int = 1_800
-    poll_interval_ms: int = 350
+    # A response is "done" once its text stops changing for this long. Kept
+    # short: a visible streaming indicator (and the per-provider _response_ready
+    # signal) already guard against returning mid-stream, so this only covers
+    # providers with no reliable done-signal.
+    stability_window_ms: int = 900
+    poll_interval_ms: int = 220
+    # Settle once a provider reports the turn is finished (copy button, actions).
+    ready_settle_ms: int = 350
 
     # Extra args passed to chromium.launch (e.g. ["--no-sandbox"]).
     launch_args: List[str] = field(default_factory=list)
 
     # Model selection: a single preferred model, or an ordered preference list
-    # (the first one that can be selected wins). Names match the provider's UI
-    # labels, e.g. "Expert"/"Fast" (Grok), "2.5 Pro"/"Flash" (Gemini).
+    # (the first one that can be selected wins). Names must match the signed-in
+    # account's picker labels; `chatsherpa models` reads those from the page.
     model: Optional[str] = None
     model_order: Optional[List[str]] = None
-
-
-_DEFAULT_UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-)
 
 
 class BaseProvider:
@@ -74,6 +158,16 @@ class BaseProvider:
 
     name: str = "base"
     home_url: str = ""
+
+    @classmethod
+    def is_conversation(cls, url: str) -> bool:
+        """True when ``url`` is an existing chat, not the new-chat home page."""
+        return False
+
+    @classmethod
+    def entry_url(cls, url: str) -> bool:
+        """True when ``url`` is a safe page to open instead of the home page."""
+        return cls.is_conversation(url)
 
     #: Selector for the message composer. May be a textarea or contenteditable.
     input_selector: str = ""
@@ -113,6 +207,7 @@ class BaseProvider:
 
         self._pw: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
+        self._display = VirtualDisplay()
         self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
 
@@ -145,19 +240,24 @@ class BaseProvider:
         return self._page
 
     async def start(self) -> "BaseProvider":
-        log.info("[%s] launching chromium (headless=%s)", self.name, self.config.headless)
+        launch_headless = self.config.headless
+        if self.config.headless and self._display.start_if_needed():
+            launch_headless = False
+        log.info("[%s] launching chromium (headless=%s)", self.name, launch_headless)
         self._pw = await async_playwright().start()
         self._browser = await self._pw.chromium.launch(
-            headless=self.config.headless,
+            headless=launch_headless,
             slow_mo=self.config.slow_mo,
-            args=self.config.launch_args,
+            args=[*self.config.launch_args, "--disable-blink-features=AutomationControlled"],
             proxy=self.config.proxy,  # type: ignore[arg-type]
+            ignore_default_args=["--enable-automation"],
         )
 
-        ctx_kwargs: Dict[str, object] = {
-            "user_agent": self.config.user_agent or _DEFAULT_UA,
-            "locale": self.config.locale,
-        }
+        ctx_kwargs: Dict[str, object] = {}
+        if self.config.user_agent:
+            ctx_kwargs["user_agent"] = self.config.user_agent
+        if self.config.locale:
+            ctx_kwargs["locale"] = self.config.locale
         if self.config.viewport:
             ctx_kwargs["viewport"] = self.config.viewport
         storage = self.session.storage_state_arg()
@@ -192,6 +292,7 @@ class BaseProvider:
                     pass
         if self._pw:
             await self._pw.stop()
+        self._display.stop()
         self._pw = self._browser = self._context = self._page = None
 
     async def _after_load(self) -> None:
@@ -376,6 +477,68 @@ class BaseProvider:
     # -------- model selection (overridable per provider) --------
     #: Button that opens the model picker menu (set per provider).
     model_picker_selector: Optional[str] = None
+    #: Menu rows to read after the picker is open. The labels come from the page.
+    model_option_selector: str = (
+        '[role="menuitem"], [role="menuitemradio"], [role="option"], [role="radio"]'
+    )
+
+    async def list_models(self) -> List[str]:
+        """Open the signed-in account's model menu and return its labels."""
+        await self.ensure_logged_in()
+        if not await self._open_model_menu():
+            return []
+        labels = clean_model_labels(await self._read_model_labels())
+        more = next((item for item in labels if _MORE_MODELS.search(item)), None)
+        if more:
+            try:
+                await self.page.get_by_role(
+                    "menuitem", name=re.compile(re.escape(more), re.I)
+                ).first.click(timeout=3_000)
+                await self.page.wait_for_timeout(400)
+                labels = clean_model_labels(await self._read_model_labels())
+            except Exception:
+                pass
+        try:
+            await self.page.keyboard.press("Escape")
+        except Exception:
+            pass
+        return [item for item in labels if not _MORE_MODELS.search(item)]
+
+    async def _open_model_menu(self) -> bool:
+        page = self.page
+        if self.model_picker_selector:
+            deadline = time.monotonic() + 8
+            loc = page.locator(self.model_picker_selector).first
+            while time.monotonic() < deadline:
+                try:
+                    if await loc.count() and await loc.is_visible():
+                        await loc.click(timeout=3_000)
+                        await page.wait_for_timeout(400)
+                        return True
+                except Exception:
+                    pass
+                await asyncio.sleep(0.4)
+            return False
+        handle = await page.evaluate_handle(_GENERIC_PICKER_JS)
+        element = handle.as_element()
+        if element is None:
+            return False
+        try:
+            await element.click(timeout=3_000)
+            await page.wait_for_timeout(400)
+            return True
+        except Exception:
+            return False
+
+    async def _read_model_labels(self) -> List[str]:
+        raw = await self.page.evaluate(
+            _READ_MODELS_JS,
+            {
+                "optionSelector": self.model_option_selector,
+                "pickerSelector": self.model_picker_selector or "",
+            },
+        )
+        return [item for item in raw or [] if isinstance(item, str)]
 
     async def select_model(self, model: str) -> bool:
         """Open the model picker and click the option matching ``model``.
@@ -459,9 +622,30 @@ class BaseProvider:
             f"[{self.name}] no new assistant message appeared."
         )
 
+    async def _is_streaming(self) -> bool:
+        """True only when a stop control is actually visible, not merely in the DOM."""
+        sel = self.streaming_indicator_selector
+        if not sel:
+            return False
+        loc = self.page.locator(sel)
+        try:
+            count = await loc.count()
+        except Exception:
+            return False
+        for i in range(min(count, 6)):
+            try:
+                if await loc.nth(i).is_visible():
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _response_ready(self) -> bool:
+        """Provider hook: the latest turn has finished generating."""
+        return False
+
     async def _wait_for_stable_response(self) -> str:
         """Poll the newest assistant block until its text stops changing."""
-        page = self.page
         deadline = time.monotonic() + self.config.response_timeout_ms / 1000
         stability = self.config.stability_window_ms / 1000
 
@@ -472,14 +656,22 @@ class BaseProvider:
                 text = await self._assistant_text()
             except Exception:
                 text = last_text
-            streaming = False
-            if self.streaming_indicator_selector:
-                streaming = await page.locator(self.streaming_indicator_selector).count() > 0
+            ready = await self._response_ready()
+            streaming = False if ready else await self._is_streaming()
+            # A finished turn only needs a short pause so the last tokens land.
+            needed = (self.config.ready_settle_ms / 1000) if ready else stability
 
-            if text and text == last_text and not streaming:
+            if text and ready and text == last_text:
+                # The provider says the turn is done and the text held steady —
+                # return as soon as the short settle elapses, no full window.
                 if stable_since is None:
                     stable_since = time.monotonic()
-                elif time.monotonic() - stable_since >= stability:
+                elif time.monotonic() - stable_since >= needed:
+                    return text
+            elif text and text == last_text and not streaming:
+                if stable_since is None:
+                    stable_since = time.monotonic()
+                elif time.monotonic() - stable_since >= needed:
                     return text
             else:
                 last_text = text

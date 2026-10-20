@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from ..base import BaseProvider
 
 
 class GrokProvider(BaseProvider):
     name = "grok"
     home_url = "https://grok.com/"
+
+    @classmethod
+    def is_conversation(cls, url: str) -> bool:
+        path = urlparse(url).path.strip("/")
+        return path.startswith("chat/") or path.startswith("c/")
 
     # Grok's composer is a tiptap/ProseMirror contenteditable (the visible
     # <textarea> is an aria-hidden decoy). Enter does not submit — the Submit
@@ -17,7 +24,6 @@ class GrokProvider(BaseProvider):
     send_button_selector = 'button[aria-label="Submit"]'
     # Assistant turns are left-aligned (.items-start); user turns are .items-end.
     assistant_message_selector = '.items-start .response-content-markdown'
-    # Model picker (e.g. Fast / Expert / Auto — Expert may be Premium-gated).
     model_picker_selector = 'button[aria-label^="Model:"]'
     login_wall_selectors = [
         'a[href*="/sign-in"]',

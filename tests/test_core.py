@@ -1,6 +1,7 @@
 """Tests for the facade, store, events, broker, and login server (no browser)."""
 
 import asyncio
+import json
 
 import pytest
 
@@ -8,11 +9,87 @@ from chatsherpa import (
     ChatSherpa, Event, ErrorType, EventBus, EventType, FileSessionStore,
     LoginRequiredError, MemorySessionStore, WebhookSink,
 )
+from chatsherpa.config import app_home
 from chatsherpa.login.flow import LoginBroker
 from chatsherpa.login.remote import LiveStreamer
 from chatsherpa.providers import ChatGPTProvider
 
 STATE = {"cookies": [{"name": "s", "value": "1", "domain": "chatgpt.com", "path": "/"}], "origins": []}
+
+
+def test_model_labels_come_from_the_page():
+    from chatsherpa.base import clean_model_labels
+    from chatsherpa.providers import ChatGPTProvider, DeepSeekProvider, GeminiProvider, GrokProvider
+    assert clean_model_labels([
+        "3.1 Pro", "3.1 Pro", "Upgrade", "Get Pro", "Model: Expert", "", "Auto",
+    ]) == ["3.1 Pro", "Expert", "Auto"]
+    for cls in (ChatGPTProvider, DeepSeekProvider, GeminiProvider, GrokProvider):
+        assert not getattr(cls, "models", None)
+
+
+def test_conversation_urls():
+    from chatsherpa.providers import ChatGPTProvider, DeepSeekProvider, GeminiProvider, GrokProvider
+    assert ChatGPTProvider.is_conversation("https://chatgpt.com/c/abc")
+    assert not ChatGPTProvider.is_conversation("https://chatgpt.com/")
+    assert GeminiProvider.is_conversation("https://gemini.google.com/app/abc123")
+    assert GeminiProvider.is_conversation("https://gemini.google.com/u/1/app/abc123")
+    assert not GeminiProvider.is_conversation("https://gemini.google.com/app")
+    assert not GeminiProvider.is_conversation("https://gemini.google.com/u/1/app")
+    assert GeminiProvider.entry_url("https://gemini.google.com/u/1/app")
+    assert GeminiProvider.account_index("https://gemini.google.com/u/1/app") == 1
+    assert GeminiProvider.account_index("https://gemini.google.com/app") == 0
+    assert GeminiProvider.account_home(1) == "https://gemini.google.com/u/1/app"
+    assert DeepSeekProvider.is_conversation("https://chat.deepseek.com/a/chat/s/abc")
+    assert not DeepSeekProvider.is_conversation("https://chat.deepseek.com/")
+    assert GrokProvider.is_conversation("https://grok.com/chat/abc")
+    assert not GrokProvider.is_conversation("https://grok.com/")
+
+
+async def test_thread_url_roundtrip(tmp_path):
+    s = FileSessionStore(tmp_path)
+    assert await s.get_thread("local", "chatgpt") is None
+    await s.put_thread("local", "chatgpt", "https://chatgpt.com/c/abc")
+    assert await s.get_thread("local", "chatgpt") == "https://chatgpt.com/c/abc"
+    await s.delete("local", "chatgpt")
+    assert await s.get_thread("local", "chatgpt") is None
+
+
+def test_app_home_honors_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHATSHERPA_HOME", str(tmp_path))
+    assert app_home() == tmp_path.resolve()
+
+
+def test_request_login_link_posts_secret(monkeypatch):
+    from chatsherpa.cli import request_login_link
+    captured = {}
+
+    class Resp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self):
+            return b'{"url":"https://login.example/connect/abc","token":"abc","expires_in":600}'
+
+    def fake_open(req, timeout=20):
+        captured["url"] = req.full_url
+        captured["secret"] = req.get_header("X-chatsherpa-secret")
+        captured["body"] = json.loads(req.data.decode())
+        return Resp()
+
+    monkeypatch.setattr("chatsherpa.cli.urllib.request.urlopen", fake_open)
+    info = request_login_link("https://login.example/", "s3cret", "chatgpt", "local", "connect")
+    assert info["url"].endswith("/connect/abc")
+    assert captured["url"] == "https://login.example/api/login"
+    assert captured["secret"] == "s3cret"
+    assert captured["body"] == {"provider": "chatgpt", "user_id": "local", "mode": "connect"}
+
+
+def test_app_home_uses_install_tree(monkeypatch):
+    monkeypatch.delenv("CHATSHERPA_HOME", raising=False)
+    root = app_home()
+    assert (root / "pyproject.toml").exists()
+    assert (root / "chatsherpa").is_dir()
 
 
 async def test_memory_store_roundtrip():

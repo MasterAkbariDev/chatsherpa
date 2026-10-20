@@ -1,0 +1,31 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b2030"/>
+      <stop offset="1" stop-color="#0d1017"/>
+    </linearGradient>
+    <linearGradient id="peak" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#1f9e8e"/>
+      <stop offset="0.55" stop-color="#2fc7b4"/>
+      <stop offset="1" stop-color="#7ef0e0"/>
+    </linearGradient>
+    <linearGradient id="peak2" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#2a7f98"/>
+      <stop offset="1" stop-color="#53c7e8"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="128" height="128" rx="28" fill="url(#bg)"/>
+  <rect x="0.75" y="0.75" width="126.5" height="126.5" rx="27.25" fill="none" stroke="#ffffff" stroke-opacity="0.07" stroke-width="1.5"/>
+  <!-- back peak -->
+  <path d="M74 96 L96 54 L116 96 Z" fill="url(#peak2)" opacity="0.85"/>
+  <!-- main peak -->
+  <path d="M26 96 L58 36 L92 96 Z" fill="url(#peak)"/>
+  <!-- snow cap notch -->
+  <path d="M47 58 L58 36 L69 58 L61 53 L58 60 L55 53 Z" fill="#eafcf9" opacity="0.92"/>
+  <!-- summit node (the 'connection' / signal) -->
+  <circle cx="58" cy="36" r="9" fill="#0d1017"/>
+  <circle cx="58" cy="36" r="6.2" fill="#7ef0e0"/>
+  <circle cx="58" cy="36" r="2.6" fill="#0d1017"/>
+  <!-- base line / bridge -->
+  <rect x="24" y="95" width="92" height="6" rx="3" fill="#2fc7b4" opacity="0.5"/>
+</svg>

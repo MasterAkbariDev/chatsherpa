@@ -21,6 +21,7 @@
   a.btn{display:inline-block;margin-top:10px;background:var(--teal);color:#06231f;text-decoration:none;font-weight:600;
         padding:9px 16px;border-radius:9px;font-size:13.5px}
   button.cap{margin-top:12px;background:var(--violet);color:#120f22;border:0;font-weight:600;padding:10px 16px;border-radius:9px;cursor:pointer;font-size:13.5px}
+  #accounts button.cap{display:block}
   button.cap:disabled{opacity:.5;cursor:default}
   code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
   pre{background:#0a0c10;border:1px solid var(--line);border-radius:9px;padding:11px 13px;overflow-x:auto;margin:10px 0 0;color:var(--teal)}
@@ -36,7 +37,7 @@
 
     <div class="step">
       <h2><span class="num">1</span> Log in to __PROVIDER__</h2>
-      <p>Open __PROVIDER__ in a new tab and sign in as you normally would.</p>
+      <p>Open __PROVIDER__ in a new tab and sign in as you normally would. For Gemini, the next step lists the Google accounts already signed in, by email.</p>
       <a class="btn" href="__HOME__" target="_blank" rel="noopener">Open __PROVIDER__ ↗</a>
     </div>
 
@@ -44,6 +45,7 @@
       <h2><span class="num">2</span> Capture the session <span class="tag">extension</span></h2>
       <p>If you installed the ChatSherpa Connector extension, come back here and click capture — it reads your __PROVIDER__ session and sends it over.</p>
       <button class="cap" id="cap">Capture session</button>
+      <div id="accounts" hidden></div>
       <div class="result" id="res"></div>
     </div>
 
@@ -56,20 +58,73 @@
 <!-- The extension's content script reads this config (works across isolated worlds). -->
 <script type="application/json" id="chatsherpa-config">{"token":"__TOKEN__","provider":"__PROVIDER__","ingest":"__INGEST__","home":"__HOME__"}</script>
 <script>
-  var cap = document.getElementById("cap"), res = document.getElementById("res"), timer = null;
-  cap.addEventListener("click", function(){
+  var cap = document.getElementById("cap"), res = document.getElementById("res"),
+      accounts = document.getElementById("accounts"), timer = null,
+      cfgEl = document.getElementById("chatsherpa-config");
+  function cfg(){ try { return JSON.parse(cfgEl.textContent); } catch (e) { return {}; } }
+  function askExtension(){
     res.textContent = "Asking the extension…"; res.className = "result";
-    window.dispatchEvent(new CustomEvent("chatsherpa:capture"));   // trigger; config is in the DOM
+    window.dispatchEvent(new CustomEvent("chatsherpa:capture"));
     clearTimeout(timer);
     timer = setTimeout(function(){
       res.className = "result";
-      res.textContent = "No extension detected. Install it, or use the terminal method below.";
+      res.textContent = "No extension detected. On chrome://extensions click Reload on ChatSherpa Connector, then reload this page.";
     }, 4000);
+  }
+  var picked = "";
+  cap.addEventListener("click", function(){
+    if (cfg().provider !== "gemini") return askExtension();
+    accounts.hidden = true;
+    accounts.innerHTML = "";
+    res.textContent = "Looking up your Google accounts…"; res.className = "result";
+    window.dispatchEvent(new CustomEvent("chatsherpa:accounts"));
+    clearTimeout(timer);
+    timer = setTimeout(function(){
+      res.className = "result";
+      res.textContent = "No extension detected. On chrome://extensions click Reload on ChatSherpa Connector, then reload this page.";
+    }, 4000);
+  });
+  window.addEventListener("chatsherpa:account-list", function(e){
+    clearTimeout(timer);
+    var list = (e.detail && e.detail.accounts) || [];
+    accounts.innerHTML = "";
+    if (!list.length) {
+      res.className = "result";
+      res.textContent = (e.detail && e.detail.error) || "No signed-in Google accounts found. Open Gemini and sign in, then try again.";
+      return;
+    }
+    var label = document.createElement("p");
+    label.textContent = "Which Google account?";
+    accounts.appendChild(label);
+    list.forEach(function(item){
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "cap";
+      btn.setAttribute("data-account", String(item.index));
+      btn.textContent = item.email || ("Account " + (item.index + 1));
+      accounts.appendChild(btn);
+    });
+    accounts.hidden = false;
+    res.textContent = "";
+  });
+  accounts.addEventListener("click", function(ev){
+    var btn = ev.target.closest("[data-account]");
+    if (!btn) return;
+    var next = cfg();
+    next.account = Number(btn.getAttribute("data-account"));
+    next.email = btn.textContent;
+    picked = btn.textContent;
+    cfgEl.textContent = JSON.stringify(next);
+    askExtension();
   });
   window.addEventListener("chatsherpa:captured", function(e){
     clearTimeout(timer);
-    if (e.detail && e.detail.ok){ res.className="result good"; res.textContent="✓ Session captured. You can close this tab."; cap.disabled=true; }
-    else { res.className="result"; res.textContent="Couldn't capture — are you logged in to __PROVIDER__? Try again, or use the terminal method below."; }
+    if (e.detail && e.detail.ok){
+      res.className="result good";
+      var who = e.detail.email || picked;
+      res.textContent="✓ Session captured." + (who ? " " + who + "." : "") + " You can capture again if you need a different account.";
+    }
+    else { res.className="result"; res.textContent=(e.detail && e.detail.error) || "Couldn't capture — are you logged in to __PROVIDER__? Try again, or use the terminal method below."; }
   });
 </script>
 </body>

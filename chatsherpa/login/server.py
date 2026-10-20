@@ -20,7 +20,7 @@ from typing import Any, Optional
 from aiohttp import WSMsgType, web
 from playwright.async_api import async_playwright
 
-from ..base import ProviderConfig, _DEFAULT_UA
+from ..base import ProviderConfig
 from ..events import ErrorType, Event, EventBus, EventType
 from ..providers import get_provider
 from .flow import LoginBroker
@@ -62,14 +62,20 @@ class LoginServer:
         if self._browser:
             return
         self._pw = await async_playwright().start()
-        self._browser = await self._pw.chromium.launch(headless=self.headless)
+        self._browser = await self._pw.chromium.launch(
+            headless=self.headless,
+            ignore_default_args=["--enable-automation"],
+        )
 
     async def create_login(self, provider: str, user_id: str) -> dict:
         await self._ensure_browser()
         provider_cls = get_provider(provider)
         pending = self.broker.create(provider_cls, user_id, ttl=self.ttl)
 
-        context = await self._browser.new_context(user_agent=self.config.user_agent or _DEFAULT_UA)
+        ctx_kwargs: dict = {}
+        if self.config.user_agent:
+            ctx_kwargs["user_agent"] = self.config.user_agent
+        context = await self._browser.new_context(**ctx_kwargs)
         page = await context.new_page()
         await page.goto(provider_cls.home_url, wait_until="domcontentloaded",
                         timeout=self.config.nav_timeout_ms)
@@ -166,9 +172,14 @@ class LoginServer:
         if not state and body.get("cookies"):
             from ..session import Session
             state = Session.from_cookies(body["cookies"]).to_storage_state()
+            if isinstance(body.get("origins"), list):
+                state["origins"] = body["origins"]
         if not state or not state.get("cookies"):
             return web.json_response({"error": "no session data"}, status=400)
         await self.store.put(pending.user_id, pending.provider_cls.name, state)
+        home = body.get("home")
+        if isinstance(home, str) and pending.provider_cls.entry_url(home):
+            await self.store.put_thread(pending.user_id, pending.provider_cls.name, home)
         self.broker.resolve(pending.token, state)
         await self.bus.emit(Event(EventType.LOGIN_SUCCEEDED, provider=pending.provider_cls.name,
                                   user_id=pending.user_id, data={"via": "ingest"}))

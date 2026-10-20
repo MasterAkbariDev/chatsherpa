@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from rich.markup import escape
 from rich.align import Align
 from rich.console import Console
 from rich.panel import Panel
@@ -59,7 +60,8 @@ def warn(msg: str) -> None:
 
 
 def fail(msg: str) -> None:
-    console.print(f"[{CORAL}]✗[/] {msg}")
+    # escape() so a message like "[chatgpt] not authenticated" is not eaten as markup
+    console.print(f"[{CORAL}]✗[/] {escape(msg)}")
 
 
 def pstyle(name: str) -> str:

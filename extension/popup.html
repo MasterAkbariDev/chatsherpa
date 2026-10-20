@@ -3,22 +3,113 @@
 <head>
 <meta charset="utf-8">
 <style>
-  body{width:260px;margin:0;font:13px/1.5 system-ui,-apple-system,sans-serif;background:#171a21;color:#e9ebf0;padding:14px}
-  h1{font-size:14px;margin:0 0 8px;color:#2fc7b4}
-  p{margin:0 0 8px;color:#9aa3b2}
-  ol{margin:0;padding-left:18px;color:#c7cdd8}
-  li{margin-bottom:5px}
-  code{background:#0a0c10;border:1px solid #2a2f3a;border-radius:4px;padding:1px 5px;font-family:ui-monospace,monospace;font-size:11.5px}
+  :root{
+    --bg:#0f1218; --card:#161b24; --card2:#1c2230; --line:#272e3c;
+    --ink:#e9ecf2; --soft:#98a1b2; --faint:#636d7e;
+    --teal:#2fc7b4; --teal-dim:#1f9e8e; --cyan:#53c7e8; --good:#4cc488; --warn:#e8a34d;
+  }
+  *{box-sizing:border-box}
+  body{width:320px;margin:0;background:var(--bg);color:var(--ink);
+       font:13px/1.5 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+
+  /* header */
+  .top{display:flex;align-items:center;gap:11px;padding:16px 16px 14px;
+       background:linear-gradient(160deg,#182230 0%,#0f1218 70%);border-bottom:1px solid var(--line)}
+  .logo{width:38px;height:38px;border-radius:11px;flex:none;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+  .title{flex:1;min-width:0}
+  .title h1{margin:0;font-size:15px;font-weight:650;letter-spacing:-.01em}
+  .title p{margin:1px 0 0;font-size:11.5px;color:var(--soft)}
+  .ver{font:600 10px ui-monospace,monospace;color:var(--teal);background:rgba(47,199,180,.12);
+       border:1px solid rgba(47,199,180,.25);padding:2px 7px;border-radius:999px}
+
+  .body{padding:14px 16px 16px}
+
+  /* status pill */
+  .status{display:flex;align-items:center;gap:9px;background:var(--card);border:1px solid var(--line);
+          border-radius:11px;padding:11px 12px;margin-bottom:14px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--faint);flex:none;position:relative}
+  .dot.on{background:var(--good);box-shadow:0 0 0 3px rgba(76,196,136,.18)}
+  .dot.on::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:1px solid var(--good);
+                 opacity:.5;animation:pulse 2s ease-out infinite}
+  @keyframes pulse{0%{transform:scale(.8);opacity:.6}100%{transform:scale(1.8);opacity:0}}
+  .status .st-txt{flex:1;min-width:0}
+  .status .st-txt b{display:block;font-size:12.5px}
+  .status .st-txt span{font-size:11px;color:var(--soft)}
+
+  /* section label */
+  .lbl{font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;
+       color:var(--faint);margin:0 0 9px 2px}
+
+  /* providers */
+  .provs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+  .prov{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);
+        border-radius:10px;padding:9px 10px}
+  .prov .pi{width:22px;height:22px;border-radius:6px;flex:none;display:grid;place-items:center;
+            font:700 11px system-ui;color:#0d1017}
+  .prov .pn{font-size:12px;font-weight:550}
+  .pi.chatgpt{background:#10a37f}.pi.gemini{background:#4f8cff}.pi.grok{background:#cfd4dd}.pi.deepseek{background:#4d6bfe;color:#fff}
+
+  /* steps */
+  .steps{counter-reset:s;list-style:none;margin:0 0 14px;padding:0}
+  .steps li{counter-increment:s;position:relative;padding:0 0 11px 30px;font-size:12px;color:var(--soft)}
+  .steps li:last-child{padding-bottom:0}
+  .steps li::before{content:counter(s);position:absolute;left:0;top:-1px;width:20px;height:20px;
+       border-radius:50%;background:var(--card2);border:1px solid var(--line);color:var(--teal);
+       font:600 11px ui-monospace,monospace;display:grid;place-items:center}
+  .steps li::after{content:"";position:absolute;left:9.5px;top:20px;bottom:2px;width:1px;background:var(--line)}
+  .steps li:last-child::after{display:none}
+  .steps b{color:var(--ink);font-weight:600}
+
+  .foot{display:flex;align-items:center;justify-content:space-between;gap:8px;
+        padding-top:12px;border-top:1px solid var(--line);font-size:11px;color:var(--faint)}
+  .foot .lock{display:flex;align-items:center;gap:5px}
+  .foot svg{width:12px;height:12px;flex:none}
+  a{color:var(--teal);text-decoration:none}
 </style>
 </head>
 <body>
-  <h1>ChatSherpa Connector</h1>
-  <p>Capture a signed-in AI session for your bridge server.</p>
-  <ol>
-    <li>Log in to the provider (ChatGPT, Gemini, Grok, DeepSeek) in a normal tab.</li>
-    <li>Open the <code>/connect/&lt;token&gt;</code> link your bot sent you.</li>
-    <li>Click <b>Capture session</b> on that page.</li>
-  </ol>
-  <p>The session is sent only to the server in that link.</p>
+  <div class="top">
+    <img class="logo" src="icons/icon48.png" alt="">
+    <div class="title">
+      <h1>ChatSherpa</h1>
+      <p>Session connector</p>
+    </div>
+    <span class="ver" id="ver">v0.1.4</span>
+  </div>
+
+  <div class="body">
+    <div class="status">
+      <span class="dot on" id="dot"></span>
+      <div class="st-txt">
+        <b id="st-title">Ready to capture</b>
+        <span id="st-sub">Open your login link, then click Capture</span>
+      </div>
+    </div>
+
+    <p class="lbl">Supported providers</p>
+    <div class="provs">
+      <div class="prov"><span class="pi chatgpt">C</span><span class="pn">ChatGPT</span></div>
+      <div class="prov"><span class="pi gemini">G</span><span class="pn">Gemini</span></div>
+      <div class="prov"><span class="pi grok">X</span><span class="pn">Grok</span></div>
+      <div class="prov"><span class="pi deepseek">D</span><span class="pn">DeepSeek</span></div>
+    </div>
+
+    <p class="lbl">How it works</p>
+    <ol class="steps">
+      <li>Sign in to the provider in a <b>normal tab</b> — Google and 2FA work.</li>
+      <li>Open the <b>connect link</b> your bot sent you.</li>
+      <li>Click <b>Capture session</b> on that page.</li>
+    </ol>
+
+    <div class="foot">
+      <span class="lock">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+        Sent only to your server
+      </span>
+      <a href="https://github.com/MasterAkbariDev/chatsherpa" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
 </body>
 </html>
