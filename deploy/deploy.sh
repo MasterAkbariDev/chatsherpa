@@ -42,12 +42,17 @@ if ! git diff --quiet HEAD -- || [ -n "$(git ls-files --others --exclude-standar
 fi
 
 echo "==> shipping code to $SERVER:$REMOTE_DIR"
-git archive --format=tar HEAD | ssh "${SSH_OPTS[@]}" "$SERVER" \
+# Send the tarball to a temp file first, so the bootstrap heredoc below can own
+# stdin without colliding with the archive stream.
+git archive --format=tar HEAD | ssh "${SSH_OPTS[@]}" "$SERVER" "cat > /tmp/chatsherpa-deploy.tar"
+
+ssh "${SSH_OPTS[@]}" "$SERVER" \
   "REMOTE_DIR='$REMOTE_DIR' DO_CHROMIUM='$DO_CHROMIUM' DO_NGINX='$DO_NGINX' \
    NGINX_SITE='${NGINX_SITE:-}' NGINX_DOMAIN='${NGINX_DOMAIN:-}' bash -s" <<'REMOTE'
 set -euo pipefail
 mkdir -p "$REMOTE_DIR"
-tar -x -C "$REMOTE_DIR" -f -
+tar -x -C "$REMOTE_DIR" -f /tmp/chatsherpa-deploy.tar
+rm -f /tmp/chatsherpa-deploy.tar
 cd "$REMOTE_DIR"
 
 echo "==> python venv + package"
