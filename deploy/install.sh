@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Fresh install of the ChatSherpa login server on a Linux host. Run as root.
 #
-#   bash install.sh                      # interactive (asks name, domain, nginx)
-#   PUBLIC_BASE_URL=https://d/badsad bash install.sh      # non-interactive
-#   curl -fsSL .../install.sh | bash
+#   bash install.sh                      # interactive (asks domain, name, nginx)
+#   PUBLIC_BASE_URL=https://example.com/chatsherpa bash install.sh
+#   curl -fsSL .../install.sh | bash     # blank domain → http://<this-ip>:8080
 #
 # Env (all optional; you are asked for anything missing):
-#   PUBLIC_BASE_URL  full public URL incl. the name path, e.g. https://d/badsad
+#   PUBLIC_BASE_URL  full public URL incl. the name path, e.g. https://example.com/chatsherpa
 #   MOUNT            project name = URL path = nginx location (default chatsherpa)
-#   NGINX_DOMAIN     the public domain (when PUBLIC_BASE_URL is not given)
+#   NGINX_DOMAIN     the public domain (when PUBLIC_BASE_URL is not given).
+#                    Leave empty to serve directly on this server's IP (no nginx).
 #   NGINX_SITE       nginx site file to edit (skips the interactive picker)
 #   INSTALL_DIR      default /opt/chatsherpa   SERVER_PORT  default 8080
 #   REPO_URL         the git repo              WITH_CHROMIUM=1  install Chromium
@@ -20,6 +21,9 @@ SERVER_PORT="${SERVER_PORT:-8080}"
 BASE="${PUBLIC_BASE_URL:-}"
 MOUNT="${MOUNT:-}"
 DOMAIN="${NGINX_DOMAIN:-}"
+BIND=127.0.0.1
+VIA_IP=""
+NGINX_ON=""
 
 # ---- colors + helpers -------------------------------------------------------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -57,17 +61,50 @@ printf "${TEAL}${B}  ChatSherpa installer${RST}\n"
 # ---- name + url -------------------------------------------------------------
 step "Configuration"
 if [ -z "$BASE" ]; then
-    [ -n "$MOUNT" ]  || MOUNT="$(ask "  project name (URL path) [${DIM}chatsherpa${RST}]: " chatsherpa)"
-    [ -n "$DOMAIN" ] || DOMAIN="$(ask "  public domain (e.g. bv.example.com): " "")"
-    [ -n "$DOMAIN" ] || die "no domain — set PUBLIC_BASE_URL, or MOUNT + NGINX_DOMAIN"
-    MOUNT="${MOUNT:-chatsherpa}"
-    BASE="https://$DOMAIN/$MOUNT"
+    if [ -z "$DOMAIN" ]; then
+        DOMAIN="$(ask "  public domain (e.g. example.com) [${DIM}blank = this server IP${RST}]: " "")"
+    fi
+    if [ -z "$DOMAIN" ]; then
+        IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}')"
+        [ -n "$IP" ] || IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+        if [ -n "$TTY" ]; then
+            if [ -n "$IP" ]; then
+                printf "  ${DIM}detected${RST} ${B}%s${RST} ${DIM}— a VPN can show the tunnel address${RST}\n" "$IP"
+                yn="$(ask "  use this IP? [${DIM}Y/n${RST}]: " y)"
+                case "$(printf '%s' "$yn" | tr '[:upper:]' '[:lower:]')" in
+                    n|no)
+                        IP="$(ask "  public IP: " "")"
+                        IP="$(printf '%s' "$IP" | tr -d '[:space:]')"
+                        ;;
+                esac
+            else
+                IP="$(ask "  public IP [${DIM}type it${RST}]: " "")"
+                IP="$(printf '%s' "$IP" | tr -d '[:space:]')"
+            fi
+        fi
+        printf '%s' "$IP" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' \
+            || die "need an IPv4 address — type one at the prompt, or set PUBLIC_BASE_URL"
+        BIND=0.0.0.0
+        VIA_IP=1
+        BASE="http://$IP:$SERVER_PORT"
+    else
+        [ -n "$MOUNT" ] || MOUNT="$(ask "  project name (URL path) [${DIM}chatsherpa${RST}]: " chatsherpa)"
+        MOUNT="${MOUNT:-chatsherpa}"
+        BASE="https://$DOMAIN/$MOUNT"
+    fi
 else
     [ -n "$DOMAIN" ] || DOMAIN="$(printf '%s' "$BASE" | sed -E 's#^https?://([^/]+).*#\1#')"
-    [ -n "$MOUNT" ]  || MOUNT="$(printf '%s' "$BASE" | sed -E 's#^https?://[^/]+/?##; s#/$##')"
+    [ -n "$MOUNT" ] || MOUNT="$(printf '%s' "$BASE" | sed -E 's#^https?://[^/]+/?##; s#/$##')"
+    case "$DOMAIN" in
+        [0-9]*.[0-9]*.[0-9]*.[0-9]*) BIND=0.0.0.0; VIA_IP=1 ;;
+    esac
 fi
-MOUNT="$(printf '%s' "$MOUNT" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9/-]##g; s#^/##; s#/$##')"
-ok "name ${B}${MOUNT:-<root>}${RST}   url ${B}$BASE${RST}"
+if [ -n "$VIA_IP" ]; then
+    ok "direct ${B}$BASE${RST}   (no domain, no nginx)"
+else
+    MOUNT="$(printf '%s' "$MOUNT" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9/-]##g; s#^/##; s#/$##')"
+    ok "name ${B}${MOUNT:-<root>}${RST}   url ${B}$BASE${RST}"
+fi
 
 # ---- packages + code --------------------------------------------------------
 step "Packages"
@@ -107,7 +144,7 @@ if [ ! -f .env ]; then
     KEY="$(.venv/bin/python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
     ( umask 177; cat > .env <<EOF
 PUBLIC_BASE_URL=$BASE
-SERVER_HOST=127.0.0.1
+SERVER_HOST=$BIND
 SERVER_PORT=$SERVER_PORT
 API_SECRET=$SECRET
 ENCRYPTION_KEY=$KEY
@@ -153,11 +190,11 @@ EOF
 
 apply_existing() { # $1 = file
     local f="$1"
-    grep -q "location /$MOUNT/" "$f" && { ok "already present in $(basename "$f")"; return; }
+    grep -q "location /$MOUNT/" "$f" && { NGINX_ON=1; ok "already present in $(basename "$f")"; return; }
     cp -p "$f" "$f.bak-chatsherpa-$(date +%Y%m%d-%H%M%S)"
     BLOCK="$(proxy_block)" perl -0777 -i -pe 's/^([ \t]*location \/ \{)/$ENV{BLOCK}\n\n$1/m' "$f"
     grep -q "location /$MOUNT/" "$f" || { mv "$f".bak-chatsherpa-* "$f"; warn "no 'location /' in $(basename "$f") — add deploy/nginx-snippet.conf manually"; return; }
-    if nginx -t >/dev/null 2>&1; then systemctl reload nginx; ok "added to $(basename "$f") and reloaded"
+    if nginx -t >/dev/null 2>&1; then systemctl reload nginx; NGINX_ON=1; ok "added to $(basename "$f") and reloaded"
     else mv "$f".bak-chatsherpa-* "$f"; warn "nginx test failed — rolled back"; fi
 }
 
@@ -165,13 +202,15 @@ create_new() { # $1 = file
     local f="$1"
     { printf 'server {\n    listen 80;\n    server_name %s;\n\n' "$DOMAIN"; proxy_block; printf '}\n'; } > "$f"
     [ -d /etc/nginx/sites-enabled ] && ln -sf "$f" "/etc/nginx/sites-enabled/$(basename "$f")"
-    if nginx -t >/dev/null 2>&1; then systemctl reload nginx; ok "created $(basename "$f") (HTTP) and reloaded"
+    if nginx -t >/dev/null 2>&1; then systemctl reload nginx; NGINX_ON=1; ok "created $(basename "$f") (HTTP) and reloaded"
         warn "this new site is HTTP only — add TLS for the login links (e.g. certbot --nginx -d $DOMAIN)"
     else rm -f "$f" "/etc/nginx/sites-enabled/$(basename "$f")"; warn "nginx test failed — new site removed"; fi
 }
 
 step "nginx reverse proxy"
-if [ -z "$MOUNT" ]; then
+if [ -n "$VIA_IP" ]; then
+    ok "skipped — open port ${B}$SERVER_PORT${RST} if a firewall is on"
+elif [ -z "$MOUNT" ]; then
     warn "root URL (no path) — configure nginx manually"
 elif ! command -v nginx >/dev/null 2>&1; then
     warn "nginx not installed — skipping (proxy 127.0.0.1:$SERVER_PORT when you set it up)"
@@ -201,5 +240,11 @@ fi
 step "Done"
 ok "installed at ${B}$INSTALL_DIR${RST}"
 ok "public url  ${B}$BASE${RST}"
+if [ -n "$VIA_IP" ] || [ -n "$NGINX_ON" ]; then
+    ok "health      ${B}$BASE/healthz${RST}"
+else
+    ok "health      ${B}http://127.0.0.1:$SERVER_PORT/healthz${RST}"
+    warn "public $BASE/healthz answers after nginx proxies 127.0.0.1:$SERVER_PORT"
+fi
 printf "  ${DIM}bot posts to${RST} %s/api/login ${DIM}with header${RST} X-ChatSherpa-Secret\n" "$BASE"
 printf "  ${DIM}read the secret:${RST} grep ^API_SECRET %s/.env\n" "$INSTALL_DIR"
