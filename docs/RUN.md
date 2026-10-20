@@ -47,6 +47,40 @@ Other ways to get a session:
 - `chatsherpa import chatgpt ~/Downloads/cookies.json` imports a
   Cookie-Editor JSON export.
 
+## 2b. Multiple accounts
+
+There are two independent ways to hold more than one account.
+
+**Separate sessions (works for every provider).** Each stored session has an
+account label (`--user`, default `local`). Grab or import under different labels:
+
+```bash
+make grab PROVIDER=chatgpt CDP=http://localhost:9222        # label: local
+chatsherpa grab chatgpt --cdp http://localhost:9222 --user work
+chatsherpa import gemini ~/Downloads/personal.json --user personal
+```
+
+Ask with a specific account, and see or remove them:
+
+```bash
+chatsherpa ask chatgpt "hi" --user work
+chatsherpa sessions                 # lists provider + account + age
+chatsherpa remove chatgpt --user work
+chatsherpa remove gemini --all      # every stored Gemini account
+```
+
+**Several Google accounts in one Gemini session (`--account`).** A single Gemini
+login can hold multiple Google accounts, addressed by the `/u/N/` slot (0 is the
+first signed-in account, 1 the next). List them and pick one per ask:
+
+```bash
+chatsherpa models gemini            # reads the signed-in account's models
+chatsherpa ask gemini "hi" --account 1
+```
+
+The browser extension also detects the signed-in Google accounts when you
+capture a Gemini session, so the right `/u/N/` slot is stored.
+
 ## 3. Use it from your own Python code
 
 ```python
@@ -125,6 +159,20 @@ git add -A
 make deploy SERVER=root@95.182.94.71 SSH_PORT=2112 SSH_PROXY='nc -X 5 -x 127.0.0.1:10808 %h %p'
 ```
 
+The deploy script also links `chatsherpa` onto the server PATH, restarts the
+systemd service, and checks health. Extra flags:
+
+```bash
+# install Chromium + OS deps + Xvfb, trying several download mirrors
+make deploy ARGS=--chromium         # or: ./deploy/deploy.sh --chromium
+# add the /chatsherpa/ proxy block to an nginx site and reload (idempotent)
+NGINX_SITE=/etc/nginx/sites-available/your-site NGINX_DOMAIN=bv.akbaridev.com \
+  SERVER=root@95.182.94.71 SSH_PORT=2112 ./deploy/deploy.sh --nginx
+```
+
+`--chromium` is only needed for live-view login and server-side `ask`. This VPS
+has ~1 GB RAM, so a server browser is tight; connect mode needs no browser.
+
 Logs and status on the server:
 
 ```bash
@@ -159,5 +207,7 @@ installing it on this Mac requires an Xcode Command Line Tools update first.
 | `No session for ...` | `make grab` (or `make login`) for that provider |
 | `session expired` in the bot | the user runs `/ai_login <provider>` again |
 | Google says "This browser may not be secure" | use `make grab` with your own Edge, not `make login` |
+| ChatGPT says "not authenticated" but the session is fresh | ChatGPT is blocked in headless Chromium (Cloudflare). Add `--headful` locally; the server runs headed via Xvfb |
+| Reply prints a couple of seconds after it finished | expected settle window; it is short now. Gemini in headless is genuinely slow — prefer a headed run for Gemini |
 | Grab can't connect to port 9222 | Edge was not started with `--remote-debugging-port=9222`; quit Edge fully first |
 | Server returns 502 on `/chatsherpa/` | `systemctl status chatsherpa`; restart with `systemctl restart chatsherpa` |

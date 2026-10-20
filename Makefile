@@ -61,7 +61,7 @@ serve:
 	$(CHATSHERPA) serve
 
 deploy:
-	SERVER=$(SERVER) SSH_PORT=$(SSH_PORT) SSH_PROXY='$(SSH_PROXY)' ./deploy/deploy.sh
+	SERVER=$(SERVER) SSH_PORT=$(SSH_PORT) SSH_PROXY='$(SSH_PROXY)' ./deploy/deploy.sh $(ARGS)
 
 clean:
 	rm -rf .pytest_cache build dist *.egg-info
