@@ -6,15 +6,15 @@
   :root{
     --bg:#0f1218; --card:#161b24; --card2:#1c2230; --line:#272e3c;
     --ink:#e9ecf2; --soft:#98a1b2; --faint:#636d7e;
-    --teal:#2fc7b4; --teal-dim:#1f9e8e; --cyan:#53c7e8; --good:#4cc488; --warn:#e8a34d;
+    --teal:#2fc7b4; --good:#4cc488;
   }
   *{box-sizing:border-box}
-  body{width:320px;margin:0;background:var(--bg);color:var(--ink);
+  body{width:324px;margin:0;background:var(--bg);color:var(--ink);
        font:13px/1.5 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
 
   /* header */
   .top{display:flex;align-items:center;gap:11px;padding:16px 16px 14px;
-       background:linear-gradient(160deg,#182230 0%,#0f1218 70%);border-bottom:1px solid var(--line)}
+       background:linear-gradient(160deg,#182230 0%,#0f1218 72%);border-bottom:1px solid var(--line)}
   .logo{width:38px;height:38px;border-radius:11px;flex:none;box-shadow:0 2px 10px rgba(0,0,0,.4)}
   .title{flex:1;min-width:0}
   .title h1{margin:0;font-size:15px;font-weight:650;letter-spacing:-.01em}
@@ -24,41 +24,44 @@
 
   .body{padding:14px 16px 16px}
 
-  /* status pill */
-  .status{display:flex;align-items:center;gap:9px;background:var(--card);border:1px solid var(--line);
-          border-radius:11px;padding:11px 12px;margin-bottom:14px}
-  .dot{width:9px;height:9px;border-radius:50%;background:var(--faint);flex:none;position:relative}
-  .dot.on{background:var(--good);box-shadow:0 0 0 3px rgba(76,196,136,.18)}
-  .dot.on::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:1px solid var(--good);
+  /* status pill — dot in its own fixed track so it stays aligned */
+  .status{display:grid;grid-template-columns:18px 1fr;align-items:center;column-gap:10px;
+          background:var(--card);border:1px solid var(--line);border-radius:11px;padding:11px 13px;margin-bottom:15px}
+  .dot-wrap{width:18px;height:18px;display:grid;place-items:center}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--faint);position:relative}
+  .dot.on{background:var(--good)}
+  .dot.on::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1px solid var(--good);
                  opacity:.5;animation:pulse 2s ease-out infinite}
-  @keyframes pulse{0%{transform:scale(.8);opacity:.6}100%{transform:scale(1.8);opacity:0}}
-  .status .st-txt{flex:1;min-width:0}
-  .status .st-txt b{display:block;font-size:12.5px}
-  .status .st-txt span{font-size:11px;color:var(--soft)}
+  @keyframes pulse{0%{transform:scale(.6);opacity:.6}100%{transform:scale(1.7);opacity:0}}
+  .st-txt{min-width:0}
+  .st-txt b{display:block;font-size:12.5px;line-height:1.35}
+  .st-txt span{display:block;font-size:11px;color:var(--soft);line-height:1.35}
 
-  /* section label */
   .lbl{font:600 10px/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;
        color:var(--faint);margin:0 0 9px 2px}
 
   /* providers */
-  .provs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
-  .prov{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);
-        border-radius:10px;padding:9px 10px}
-  .prov .pi{width:22px;height:22px;border-radius:6px;flex:none;display:grid;place-items:center;
-            font:700 11px system-ui;color:#0d1017}
+  .provs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:15px}
+  .prov{display:flex;align-items:center;gap:9px;background:var(--card);border:1px solid var(--line);
+        border-radius:10px;padding:8px 10px}
+  .pi{width:24px;height:24px;border-radius:7px;flex:none;display:grid;place-items:center}
+  .pi svg{width:15px;height:15px;display:block}
+  .pi.chatgpt{background:#10a37f}.pi.gemini{background:#3b7cf6}
+  .pi.grok{background:#e7e9ee}.pi.deepseek{background:#4d6bfe}
   .prov .pn{font-size:12px;font-weight:550}
-  .pi.chatgpt{background:#10a37f}.pi.gemini{background:#4f8cff}.pi.grok{background:#cfd4dd}.pi.deepseek{background:#4d6bfe;color:#fff}
 
   /* steps */
-  .steps{counter-reset:s;list-style:none;margin:0 0 14px;padding:0}
-  .steps li{counter-increment:s;position:relative;padding:0 0 11px 30px;font-size:12px;color:var(--soft)}
+  .steps{counter-reset:s;list-style:none;margin:0 0 15px;padding:0}
+  .steps li{counter-increment:s;position:relative;padding:0 0 13px 32px;font-size:12px;color:var(--soft)}
   .steps li:last-child{padding-bottom:0}
-  .steps li::before{content:counter(s);position:absolute;left:0;top:-1px;width:20px;height:20px;
+  .steps li::before{content:counter(s);position:absolute;left:0;top:-1px;width:21px;height:21px;
        border-radius:50%;background:var(--card2);border:1px solid var(--line);color:var(--teal);
        font:600 11px ui-monospace,monospace;display:grid;place-items:center}
-  .steps li::after{content:"";position:absolute;left:9.5px;top:20px;bottom:2px;width:1px;background:var(--line)}
+  .steps li::after{content:"";position:absolute;left:10px;top:22px;bottom:3px;width:1px;background:var(--line)}
   .steps li:last-child::after{display:none}
   .steps b{color:var(--ink);font-weight:600}
+  .steps code{font:11px ui-monospace,monospace;background:#0a0c10;border:1px solid var(--line);
+       border-radius:4px;padding:0 4px;color:var(--teal)}
 
   .foot{display:flex;align-items:center;justify-content:space-between;gap:8px;
         padding-top:12px;border-top:1px solid var(--line);font-size:11px;color:var(--faint)}
@@ -74,12 +77,12 @@
       <h1>ChatSherpa</h1>
       <p>Session connector</p>
     </div>
-    <span class="ver" id="ver">v0.1.4</span>
+    <span class="ver" id="ver">v0.1.5</span>
   </div>
 
   <div class="body">
     <div class="status">
-      <span class="dot on" id="dot"></span>
+      <span class="dot-wrap"><span class="dot on" id="dot"></span></span>
       <div class="st-txt">
         <b id="st-title">Ready to capture</b>
         <span id="st-sub">Open your login link, then click Capture</span>
@@ -88,17 +91,29 @@
 
     <p class="lbl">Supported providers</p>
     <div class="provs">
-      <div class="prov"><span class="pi chatgpt">C</span><span class="pn">ChatGPT</span></div>
-      <div class="prov"><span class="pi gemini">G</span><span class="pn">Gemini</span></div>
-      <div class="prov"><span class="pi grok">X</span><span class="pn">Grok</span></div>
-      <div class="prov"><span class="pi deepseek">D</span><span class="pn">DeepSeek</span></div>
+      <div class="prov">
+        <span class="pi chatgpt"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"><path d="M12 3l7 4v8l-7 4-7-4V7z"/><path d="M12 3v8l7 4M12 11l-7 4"/></svg></span>
+        <span class="pn">ChatGPT</span>
+      </div>
+      <div class="prov">
+        <span class="pi gemini"><svg viewBox="0 0 24 24"><path fill="#fff" d="M12 2c.6 5.6 1.4 8.4 10 10-8.6 1.6-9.4 4.4-10 10-.6-5.6-1.4-8.4-10-10 8.6-1.6 9.4-4.4 10-10z"/></svg></span>
+        <span class="pn">Gemini</span>
+      </div>
+      <div class="prov">
+        <span class="pi grok"><svg viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="2.4" stroke-linecap="round"><path d="M6 18L16 8"/><path d="M11 6h6v6"/></svg></span>
+        <span class="pn">Grok</span>
+      </div>
+      <div class="prov">
+        <span class="pi deepseek"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M3 13c3 0 4-2 6-2s2.5 2 5 2 4-3 7-3"/><circle cx="17.5" cy="7.5" r="1" fill="#fff" stroke="none"/></svg></span>
+        <span class="pn">DeepSeek</span>
+      </div>
     </div>
 
-    <p class="lbl">How it works</p>
+    <p class="lbl">How to capture a session</p>
     <ol class="steps">
-      <li>Sign in to the provider in a <b>normal tab</b> — Google and 2FA work.</li>
-      <li>Open the <b>connect link</b> your bot sent you.</li>
-      <li>Click <b>Capture session</b> on that page.</li>
+      <li>In a normal tab, <b>sign in to the provider</b> (e.g. chatgpt.com). Google and 2&#8209;step verification work as usual.</li>
+      <li>Open the <b>connect link</b> your bot or terminal gave you — it looks like <code>&hellip;/connect/&lt;token&gt;</code>.</li>
+      <li>On that page, click <b>Capture session</b>. This extension reads the signed&#8209;in session and sends it to the server in that link.</li>
     </ol>
 
     <div class="foot">
@@ -106,7 +121,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
         Sent only to your server
       </span>
-      <a href="https://github.com/MasterAkbariDev/chatsherpa" target="_blank" rel="noopener">GitHub ↗</a>
+      <a href="https://github.com/MasterAkbariDev/chatsherpa" target="_blank" rel="noopener">GitHub &#8599;</a>
     </div>
   </div>
 
