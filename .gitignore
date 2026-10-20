@@ -30,3 +30,6 @@ screenshots/
 .claude/
 artifacts/
 *.log
+
+# build artifacts
+*.zip
