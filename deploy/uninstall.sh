@@ -22,10 +22,12 @@ systemctl daemon-reload 2>/dev/null || true
 echo "==> remove PATH link"
 rm -f /usr/local/bin/chatsherpa
 
+# MOUNT is the URL-path name used at install (default chatsherpa).
+MOUNT="${MOUNT:-chatsherpa}"
 if [ -n "${NGINX_SITE:-}" ] && [ -f "$NGINX_SITE" ]; then
-    echo "==> strip nginx /chatsherpa/ block"
+    echo "==> strip nginx /$MOUNT/ block"
     cp -p "$NGINX_SITE" "$NGINX_SITE.bak-uninstall-$(date +%Y%m%d-%H%M%S)"
-    perl -0777 -i -pe 's/[ \t]*location = \/chatsherpa \{[^}]*\}\s*location \/chatsherpa\/ \{[^}]*\}\n?//s' "$NGINX_SITE"
+    perl -0777 -i -pe "s/[ \\t]*location = \\/\\Q$ENV{MOUNT}\\E \\{[^}]*\\}\\s*location \\/\\Q$ENV{MOUNT}\\E\\/ \\{[^}]*\\}\\n?//s" "$NGINX_SITE"
     if nginx -t 2>/dev/null; then systemctl reload nginx && echo "    reloaded"; else
         echo "    nginx test failed; restoring"; mv "$NGINX_SITE".bak-uninstall-* "$NGINX_SITE"; fi
 fi
