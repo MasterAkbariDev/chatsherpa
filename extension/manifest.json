@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "ChatSherpa Connector",
+  "version": "0.1.0",
+  "description": "Capture your signed-in AI provider session and send it to your ChatSherpa server.",
+  "permissions": ["cookies"],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://*.chatgpt.com/*",
+    "https://chat.deepseek.com/*",
+    "https://grok.com/*",
+    "https://*.grok.com/*",
+    "https://gemini.google.com/*",
+    "https://*.google.com/*",
+    "http://localhost/*",
+    "https://*/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["http://*/connect/*", "https://*/connect/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": { "default_popup": "popup.html", "default_title": "ChatSherpa Connector" }
+}

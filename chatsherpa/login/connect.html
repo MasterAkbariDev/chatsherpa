@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="chatsherpa-token" content="__TOKEN__">
+<title>Connect __PROVIDER__</title>
+<style>
+  :root{--bg:#0f1115;--panel:#171a21;--line:#2a2f3a;--ink:#e9ebf0;--soft:#9aa3b2;--teal:#2fc7b4;--violet:#9b8bf0;--good:#4cc488}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       display:flex;justify-content:center;padding:24px 16px}
+  .wrap{width:100%;max-width:560px}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--soft);margin:0 0 20px}
+  .prov{color:var(--teal);font-weight:600}
+  .step{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:12px}
+  .step h2{font-size:14px;margin:0 0 6px;display:flex;align-items:center;gap:9px}
+  .num{width:22px;height:22px;border-radius:50%;background:var(--teal);color:#06231f;display:grid;place-items:center;font-size:12px;font-weight:700;flex:none}
+  .step p{margin:0;color:var(--soft);font-size:13.5px}
+  a.btn{display:inline-block;margin-top:10px;background:var(--teal);color:#06231f;text-decoration:none;font-weight:600;
+        padding:9px 16px;border-radius:9px;font-size:13.5px}
+  button.cap{margin-top:12px;background:var(--violet);color:#120f22;border:0;font-weight:600;padding:10px 16px;border-radius:9px;cursor:pointer;font-size:13.5px}
+  button.cap:disabled{opacity:.5;cursor:default}
+  code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+  pre{background:#0a0c10;border:1px solid var(--line);border-radius:9px;padding:11px 13px;overflow-x:auto;margin:10px 0 0;color:var(--teal)}
+  .result{margin-top:10px;font-size:13px}
+  .tag{display:inline-block;font-size:11px;color:var(--soft);border:1px solid var(--line);border-radius:999px;padding:2px 9px;margin-left:6px}
+  .good{color:var(--good)}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Connect <span class="prov">__PROVIDER__</span></h1>
+    <p class="sub">Log in with your real browser — no automation, so Google and 2FA work normally. Your session is then captured securely.</p>
+
+    <div class="step">
+      <h2><span class="num">1</span> Log in to __PROVIDER__</h2>
+      <p>Open __PROVIDER__ in a new tab and sign in as you normally would.</p>
+      <a class="btn" href="__HOME__" target="_blank" rel="noopener">Open __PROVIDER__ ↗</a>
+    </div>
+
+    <div class="step">
+      <h2><span class="num">2</span> Capture the session <span class="tag">extension</span></h2>
+      <p>If you installed the ChatSherpa Connector extension, come back here and click capture — it reads your __PROVIDER__ session and sends it over.</p>
+      <button class="cap" id="cap">Capture session</button>
+      <div class="result" id="res"></div>
+    </div>
+
+    <div class="step">
+      <h2><span class="num">2</span> …or capture from the terminal <span class="tag">CLI</span></h2>
+      <p>No extension? Start Chrome with a debug port, log in, then run:</p>
+      <pre id="cmd">__CMD__</pre>
+    </div>
+  </div>
+<!-- The extension's content script reads this config (works across isolated worlds). -->
+<script type="application/json" id="chatsherpa-config">{"token":"__TOKEN__","provider":"__PROVIDER__","ingest":"__INGEST__","home":"__HOME__"}</script>
+<script>
+  var cap = document.getElementById("cap"), res = document.getElementById("res"), timer = null;
+  cap.addEventListener("click", function(){
+    res.textContent = "Asking the extension…"; res.className = "result";
+    window.dispatchEvent(new CustomEvent("chatsherpa:capture"));   // trigger; config is in the DOM
+    clearTimeout(timer);
+    timer = setTimeout(function(){
+      res.className = "result";
+      res.textContent = "No extension detected. Install it, or use the terminal method below.";
+    }, 4000);
+  });
+  window.addEventListener("chatsherpa:captured", function(e){
+    clearTimeout(timer);
+    if (e.detail && e.detail.ok){ res.className="result good"; res.textContent="✓ Session captured. You can close this tab."; cap.disabled=true; }
+    else { res.className="result"; res.textContent="Couldn't capture — are you logged in to __PROVIDER__? Try again, or use the terminal method below."; }
+  });
+</script>
+</body>
+</html>
