@@ -9,20 +9,26 @@ from chatsherpa.integrations import TelegramBridge
 class FakeBridge:
     """Stand-in for ChatSherpa: records asks, fakes sessions, can raise."""
 
-    def __init__(self, sessions=(), answer="pong", raise_login=False):
+    def __init__(self, sessions=(), answer="pong", raise_login=False, chats=None):
         self._sessions = set(sessions)      # provider names the user "has"
         self.answer = answer
         self.raise_login = raise_login
         self.asks = []                      # (provider, user_id, prompt)
+        self.chats_used = []                # chat name passed on each ask
+        self._chats = chats or {}           # {(provider, user_id): {name: url}}
 
-    async def ask(self, provider, user_id, prompt):
+    async def ask(self, provider, user_id, prompt, chat="default"):
         self.asks.append((provider, str(user_id), prompt))
+        self.chats_used.append(chat)
         if self.raise_login:
             raise LoginRequiredError("expired")
         return self.answer
 
     async def has_session(self, provider, user_id):
         return provider in self._sessions
+
+    async def list_chats(self, provider, user_id):
+        return dict(self._chats.get((provider, str(user_id)), {}))
 
 
 async def test_plain_message_routes_to_default_provider():
@@ -51,6 +57,33 @@ async def test_use_switches_provider_for_subsequent_ask():
     assert fake.asks[-1][0] == "grok"               # routed to the new default
     # a different user keeps the default
     assert tg.provider_for(2) == "chatgpt"
+
+
+async def test_chat_command_switches_the_chat_for_that_user_only():
+    fake = FakeBridge(answer="ok")
+    tg = TelegramBridge(fake)
+    reply = await tg.handle(1, "/ai_chat planning")
+    assert "planning" in reply
+    await tg.handle(1, "next step?")
+    assert fake.chats_used[-1] == "planning"
+    # another user keeps the default chat
+    await tg.handle(2, "hello")
+    assert fake.chats_used[-1] == "default"
+
+
+async def test_chat_command_without_name_lists_saved_chats_and_marks_current():
+    fake = FakeBridge(chats={("chatgpt", "1"): {"planning": "u1", "writing": "u2"}})
+    tg = TelegramBridge(fake)
+    await tg.handle(1, "/ai_chat writing")
+    reply = await tg.handle(1, "/ai_chat")
+    assert "planning" in reply and "writing" in reply
+    assert "▸ writing" in reply
+
+
+async def test_chat_command_without_saved_chats_says_so():
+    tg = TelegramBridge(FakeBridge())
+    reply = await tg.handle(9, "/ai_chat")
+    assert "No saved chatgpt chats" in reply
 
 
 async def test_status_lists_sessions():

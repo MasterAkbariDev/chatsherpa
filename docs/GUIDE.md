@@ -609,6 +609,8 @@ With the default prefix `ai`:
 | `/ai_use <provider>` | set this user's default provider (`chatgpt`, `grok`, `gemini`, `deepseek`) |
 | `/ai_login <provider>` | send a sign-in link for that provider |
 | `/ai_status` | show which providers have a session for this user |
+| `/ai_chat` | list this user's saved chats, marking the current one with ▸ |
+| `/ai_chat <name>` | switch to a named chat. A new name starts a new chat on the next message. |
 
 The `/use` choice is kept in memory, so it resets when the process restarts.
 
@@ -663,8 +665,9 @@ your own handlers can deal with it.
 - `command_prefix` puts every command under one prefix, so ChatSherpa does not
   clash with your own handlers.
 - Each Telegram user has their own sessions, chats, and default provider.
-- Today the bot always uses the chat named `default` for a user. To keep several
-  conversations per user, call `bridge.ask(..., chat="name")` from your own
+- The current chat is kept in memory, so it resets to `default` when the process
+  restarts. The chats themselves are saved and survive restarts. To pick the chat
+  from your own code instead, call `bridge.ask(..., chat="name")` from your own
   handler instead of `tg.handle`.
 
 ---

@@ -30,6 +30,7 @@ from typing import Dict, Optional, Union
 
 from ..client import ChatSherpa
 from ..exceptions import LoginRequiredError
+from ..store import DEFAULT_CHAT
 
 log = logging.getLogger("chatsherpa.integrations.telegram")
 
@@ -66,6 +67,7 @@ class TelegramBridge:
         self.link_mode = link_mode
         self.connect_providers = {p.lower() for p in (connect_providers or ())}
         self._user_provider: Dict[str, str] = {}  # per-user default, in-memory
+        self._user_chat: Dict[str, str] = {}      # per-user named chat, in-memory
 
     def _mode_for(self, provider: str) -> str:
         return "connect" if provider.lower() in self.connect_providers else self.link_mode
@@ -83,9 +85,17 @@ class TelegramBridge:
     def cmd_status(self) -> str:
         return f"{self.prefix}_status"
 
+    @property
+    def cmd_chat(self) -> str:
+        return f"{self.prefix}_chat"
+
     def provider_for(self, user_id: UserId) -> str:
         """The provider this user currently targets (their /use choice or default)."""
         return self._user_provider.get(str(user_id), self.default_provider)
+
+    def chat_for(self, user_id: UserId) -> str:
+        """The named chat this user's messages continue (their /chat choice or default)."""
+        return self._user_chat.get(str(user_id), DEFAULT_CHAT)
 
     # ---------------- core ----------------
     async def handle(self, user_id: UserId, text: str) -> str:
@@ -105,6 +115,8 @@ class TelegramBridge:
                 return self._do_use(uid, arg)
             if name == self.cmd_status:
                 return await self._do_status(uid)
+            if name == self.cmd_chat:
+                return await self._do_chat(uid, arg)
             if name == self.prefix:
                 return await self._do_ask(uid, arg)
             # unknown /command we don't own — ignore quietly
@@ -119,7 +131,7 @@ class TelegramBridge:
             return "Usage: /%s <your message>" % self.prefix
         provider = self.provider_for(uid)
         try:
-            return await self.bridge.ask(provider, uid, message)
+            return await self.bridge.ask(provider, uid, message, chat=self.chat_for(uid))
         except LoginRequiredError:
             return (f"Your {provider} session has expired. "
                     f"Run /{self.cmd_login} {provider} to sign in again.")
@@ -130,6 +142,24 @@ class TelegramBridge:
             return "Usage: /%s <provider> (e.g. chatgpt, grok, gemini, deepseek)" % self.cmd_use
         self._user_provider[uid] = provider
         return f"Default provider set to {provider}."
+
+    async def _do_chat(self, uid: str, name: str) -> str:
+        """``/ai_chat`` lists this user's saved chats; ``/ai_chat <name>`` switches to one.
+
+        A name that has not been used yet starts a new chat on the next message.
+        """
+        name = name.strip().split()[0].lower() if name.strip() else ""
+        provider = self.provider_for(uid)
+        if not name:
+            chats = await self.bridge.list_chats(provider, uid)
+            current = self.chat_for(uid)
+            if not chats:
+                return (f"No saved {provider} chats yet. Send a message to start one. "
+                        f"Current chat: {current}.")
+            lines = [f"{'▸' if n == current else ' '} {n}" for n in sorted(chats)]
+            return f"Your {provider} chats (▸ current):\n" + "\n".join(lines)
+        self._user_chat[uid] = name
+        return f"Switched to chat '{name}'. Your next messages continue it."
 
     async def _do_status(self, uid: str) -> str:
         from ..providers import REGISTRY
@@ -209,7 +239,7 @@ class TelegramBridge:
             if reply:
                 await msg.reply_text(reply)
 
-        for command in (self.prefix, self.cmd_login, self.cmd_use, self.cmd_status):
+        for command in (self.prefix, self.cmd_login, self.cmd_use, self.cmd_status, self.cmd_chat):
             application.add_handler(CommandHandler(command, _reply))
         # plain text (not a command) → ask
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _reply))
@@ -236,7 +266,7 @@ class TelegramBridge:
             if reply:
                 await message.answer(reply)
 
-        commands = (self.prefix, self.cmd_login, self.cmd_use, self.cmd_status)
+        commands = (self.prefix, self.cmd_login, self.cmd_use, self.cmd_status, self.cmd_chat)
         dispatcher_or_router.message.register(_reply, Command(*commands))
         # plain text that isn't one of our commands
         dispatcher_or_router.message.register(_reply, F.text & ~F.text.startswith("/"))
