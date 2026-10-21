@@ -67,7 +67,14 @@ ln -sf "$REMOTE_DIR/.venv/bin/chatsherpa" /usr/local/bin/chatsherpa
 chatsherpa --help >/dev/null && echo "    chatsherpa -> $(command -v chatsherpa)"
 
 MEM=350M
-if [ "$DO_CHROMIUM" = "1" ]; then
+# Browsers live in the service's own cache, so the root account never keeps a
+# second copy (that copy filled small disks on every deploy).
+export PLAYWRIGHT_BROWSERS_PATH="$REMOTE_DIR/.cache/ms-playwright"
+have_chromium() { ls -d "$PLAYWRIGHT_BROWSERS_PATH"/chromium-* >/dev/null 2>&1; }
+if [ "$DO_CHROMIUM" = "1" ] || have_chromium; then
+    MEM=900M
+fi
+if [ "$DO_CHROMIUM" = "1" ] && ! have_chromium; then
     echo "==> Chromium + OS deps + Xvfb"
     apt-get update -qq || true
     apt-get install -y -qq xvfb >/dev/null 2>&1 || echo "    (could not apt-get xvfb; headed mode will not work)"
@@ -86,14 +93,14 @@ if [ "$DO_CHROMIUM" = "1" ]; then
         fi
     done
     [ "$ok" = "1" ] || echo "    WARNING: all Chromium mirrors failed; live-view/ask will not work (connect mode still works)"
-    MEM=900M
+    # Package lists are only needed during the install; drop them to keep the disk free.
+    apt-get clean >/dev/null 2>&1 || true
+    rm -rf /var/lib/apt/lists/* 2>/dev/null || true
 fi
 
 echo "==> systemd service (MemoryMax=$MEM)"
 id chatsherpa >/dev/null 2>&1 || useradd --system --home-dir "$REMOTE_DIR" --shell /usr/sbin/nologin chatsherpa
 mkdir -p sessions
-# Give Playwright's browser cache to the service user when Chromium is installed.
-[ -d /root/.cache/ms-playwright ] && { mkdir -p "$REMOTE_DIR/.cache"; cp -rn /root/.cache/ms-playwright "$REMOTE_DIR/.cache/" 2>/dev/null || true; }
 chown -R chatsherpa:chatsherpa "$REMOTE_DIR"
 sed "s#MemoryMax=.*#MemoryMax=$MEM#" deploy/chatsherpa.service > /etc/systemd/system/chatsherpa.service
 systemctl daemon-reload
