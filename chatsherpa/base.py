@@ -99,6 +99,29 @@ _READ_MODELS_JS = """({optionSelector, pickerSelector}) => {
 }"""
 
 
+_MODEL_ARROWS = "▾▸▼⌄➤⌃ "
+
+
+def clean_model_label(raw: Optional[str]) -> Optional[str]:
+    """Normalize one model-picker label to the model name, or None.
+
+    Handles localized "currently X" wrappers (e.g. Gemini's RTL
+    "…، درحال‌حاضر Flash"), a leading "Model:" prefix, and trailing dropdown
+    glyphs, so the model name can be shown in the status line.
+    """
+    if not raw:
+        return None
+    s = " ".join(raw.replace("arrow_drop_down", "").split()).strip()
+    for marker in ("currently", "درحال‌حاضر",
+                   "درحالحاضر"):
+        idx = s.lower().find(marker.lower())
+        if idx >= 0:
+            s = s[idx + len(marker):].strip(" :،,")
+    s = re.sub(r"^model:?\s*", "", s, flags=re.I).strip()
+    s = s.strip(_MODEL_ARROWS)
+    return s or None
+
+
 def clean_model_labels(raw: List[str]) -> List[str]:
     """Keep the short names a model menu actually offers."""
     seen = set()
@@ -623,12 +646,9 @@ class BaseProvider:
             btn = self.page.locator(self.model_picker_selector).first
             if not await btn.count():
                 return None
-            label = (await btn.inner_text() or "") or (await btn.get_attribute("aria-label") or "")
-            label = label.replace("\n", " ").strip()
-            for pre in ("Model:", "Model", "current model", "Current model"):
-                if label.lower().startswith(pre.lower()):
-                    label = label[len(pre):].strip(" :")
-            return label or None
+            text = (await btn.inner_text() or "").strip()
+            label = clean_model_label(text) or clean_model_label(await btn.get_attribute("aria-label") or "")
+            return label
         except Exception:
             return None
 

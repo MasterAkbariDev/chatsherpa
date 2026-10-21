@@ -376,3 +376,13 @@ async def test_ingest_rejects_bad_token():
     async with TestClient(TestServer(srv.app())) as client:
         r = await client.post("/api/ingest", json={"token": "nope", "cookies": [{"name": "a", "value": "b", "domain": "x.com"}]})
         assert r.status == 410
+
+
+def test_clean_model_label():
+    from chatsherpa.base import clean_model_label
+    assert clean_model_label("Model: Fast") == "Fast"
+    assert clean_model_label("2.5 Pro ▾") == "2.5 Pro"
+    assert clean_model_label("درحال‌حاضر Flash") == "Flash"
+    assert clean_model_label("Open mode selector, currently 2.5 Flash") == "2.5 Flash"
+    assert clean_model_label("") is None
+    assert clean_model_label("   ") is None
