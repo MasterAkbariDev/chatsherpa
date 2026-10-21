@@ -53,8 +53,41 @@ class GeminiProvider(BaseProvider):
     send_button_selector = None  # Enter submits; the send button's label is localized
     # Responses render in <model-response>; the text sits in .model-response-text.
     assistant_message_selector = ".model-response-text"
-    streaming_indicator_selector = None
+    streaming_indicator_selector = None  # Gemini's "Stop" button vanishes mid-stream, so it is unreliable.
     model_picker_selector = "bard-mode-switcher button, bard-mode-switcher"
+
+    # No reliable streaming indicator, so a done-signal is what stops Gemini from
+    # waiting the full stability window (and guards against a mid-stream pause
+    # being read as "done"). The response action bar — a visible Copy button —
+    # appears only once the turn finishes. Scope strictly to the LAST turn: stop
+    # climbing before an ancestor spans more than one `.model-response-text`.
+    _TURN_DONE_JS = """() => {
+        const vis = (el) => {
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+            return r.width > 0 && r.height > 0
+                && s.visibility !== 'hidden' && s.display !== 'none';
+        };
+        const nodes = [...document.querySelectorAll('.model-response-text')];
+        const last = nodes[nodes.length - 1];
+        if (!last) return false;
+        let box = last, cur = last.parentElement, up = 0;
+        while (cur && up < 8) {
+            if (cur.querySelectorAll('.model-response-text').length > 1) break;
+            box = cur; cur = cur.parentElement; up++;
+        }
+        const btn = box.querySelector('button[aria-label="Copy"]');
+        return !!(btn && vis(btn));
+    }"""
+
+    has_ready_signal = True
+
+    async def _response_ready(self) -> bool:
+        try:
+            return bool(await self.page.evaluate(self._TURN_DONE_JS))
+        except Exception:
+            return False
+
     login_wall_selectors = [
         'a[href*="accounts.google.com"]',
         'text="Sign in"',

@@ -25,7 +25,13 @@ class ChatGPTProvider(BaseProvider):
         '[contenteditable="true"][data-lexical-editor="true"]'
     )
     input_is_contenteditable = True
-    send_button_selector = 'button[data-testid="send-button"], #composer-submit-button'
+    # aria-label="Send" is the current, durable anchor; the data-testid/id are
+    # kept only as fallbacks. Without the aria-label match _submit() used to wait
+    # the full visible-timeout (~4s) every send before falling back to Enter.
+    send_button_selector = (
+        'button[data-testid="send-button"], #composer-submit-button, '
+        'button[aria-label="Send"]'
+    )
     # Legacy selector kept only as a fallback; the real read is JS-based below.
     assistant_message_selector = '[data-message-author-role="assistant"]'
     streaming_indicator_selector = 'button[data-testid="stop-button"], button[aria-label="Stop streaming"]'
@@ -78,6 +84,8 @@ class ChatGPTProvider(BaseProvider):
         const r = copy.getBoundingClientRect();
         return r.width > 0 && r.height > 0;
     }"""
+
+    has_ready_signal = True
 
     async def _response_ready(self) -> bool:
         try:

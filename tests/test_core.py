@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 
 import pytest
 
@@ -245,6 +246,106 @@ async def test_ensure_model_picks_first_available():
     chosen = await p.ensure_model(["Fast-missing", "Expert", "Auto"])
     assert chosen == "Expert"
     assert tried == ["Fast-missing", "Expert"]  # stops at first success
+
+
+class _ScriptedProvider:
+    """Drives BaseProvider._wait_for_stable_response from a time-based script.
+
+    ``schedule`` is a list of ``(at_seconds, text, ready)`` steps; the latest
+    step whose ``at`` has elapsed defines the current reply text and done-signal.
+    This exercises the real engine loop with no browser.
+    """
+
+    def __init__(self, schedule, cfg, has_ready_signal, streaming=False):
+        from chatsherpa.base import BaseProvider
+        self._schedule = schedule
+        self.config = cfg
+        self.has_ready_signal = has_ready_signal
+        self.name = "scripted"
+        self._streaming = streaming
+        self._t0 = time.monotonic()
+        # Borrow the real engine methods unbound.
+        self._wait = BaseProvider._wait_for_stable_response.__get__(self)
+
+    def _now(self):
+        return time.monotonic() - self._t0
+
+    def _cur(self):
+        text, ready = "", False
+        for at, t, r in self._schedule:
+            if self._now() >= at:
+                text, ready = t, r
+        return text, ready
+
+    async def _assistant_text(self):
+        return self._cur()[0]
+
+    async def _response_ready(self):
+        return self._cur()[1]
+
+    async def _is_streaming(self):
+        return self._streaming
+
+
+def _timing_cfg(**over):
+    from chatsherpa.base import ProviderConfig
+    base = dict(stability_window_ms=300, poll_interval_ms=20, ready_settle_ms=80,
+                ready_fallback_ms=800, response_timeout_ms=5000)
+    base.update(over)
+    return ProviderConfig(**base)
+
+
+async def test_done_signal_returns_on_settle_not_full_window():
+    import time as _t
+    cfg = _timing_cfg()
+    # Reply grows, then the done-signal fires while text holds steady.
+    sched = [(0.00, "", False), (0.05, "hel", False),
+             (0.10, "hello world", True)]
+    prov = _ScriptedProvider(sched, cfg, has_ready_signal=True)
+    start = _t.monotonic()
+    text = await prov._wait()
+    elapsed = _t.monotonic() - start
+    assert text == "hello world"          # complete, not the mid-stream "hel"
+    # Returned on the ~80ms settle, well before the 300ms stability window.
+    assert elapsed < 0.28, elapsed
+
+
+async def test_done_signal_rides_through_midstream_stall_no_truncation():
+    # Text stalls at "part one" for 0.5s (longer than the 300ms window) BEFORE
+    # the done-signal fires — a signal-less engine would truncate here.
+    cfg = _timing_cfg()
+    sched = [(0.00, "", False), (0.05, "part one", False),
+             (0.60, "part one and part two", False),
+             (0.65, "part one and part two", True)]
+    prov = _ScriptedProvider(sched, cfg, has_ready_signal=True)
+    text = await prov._wait()
+    assert text == "part one and part two"   # never cut at the stall
+
+
+async def test_done_signal_fallback_when_signal_never_fires():
+    import time as _t
+    # Done-signal never arrives (broken selector); engine must still return the
+    # stable text via ready_fallback_ms rather than hang to response_timeout.
+    cfg = _timing_cfg(ready_fallback_ms=300)
+    sched = [(0.00, "", False), (0.05, "answer text", False)]  # ready stays False
+    prov = _ScriptedProvider(sched, cfg, has_ready_signal=True)
+    start = _t.monotonic()
+    text = await prov._wait()
+    elapsed = _t.monotonic() - start
+    assert text == "answer text"
+    assert 0.3 <= elapsed < 0.6, elapsed      # ~fallback, not the 5s timeout
+
+
+async def test_signal_less_provider_uses_stability_window():
+    import time as _t
+    cfg = _timing_cfg(stability_window_ms=250)
+    sched = [(0.00, "", False), (0.05, "done", False)]  # no done-signal at all
+    prov = _ScriptedProvider(sched, cfg, has_ready_signal=False)
+    start = _t.monotonic()
+    text = await prov._wait()
+    elapsed = _t.monotonic() - start
+    assert text == "done"
+    assert 0.25 <= elapsed < 0.55, elapsed    # waited roughly the window
 
 
 def test_telegram_connect_mode_for_google():

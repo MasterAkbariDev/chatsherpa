@@ -130,14 +130,23 @@ class ProviderConfig:
     response_timeout_ms: int = 180_000
     login_wait_ms: int = 8_000
 
-    # A response is "done" once its text stops changing for this long. Kept
-    # short: a visible streaming indicator (and the per-provider _response_ready
-    # signal) already guard against returning mid-stream, so this only covers
-    # providers with no reliable done-signal.
+    # Fallback only, for providers with NO done-signal (``has_ready_signal`` is
+    # False): a response is "done" once its text stops changing for this long.
+    # Providers that expose ``_response_ready`` ignore this and return on the
+    # signal, so a mid-stream pause can never be read as "done".
     stability_window_ms: int = 900
-    poll_interval_ms: int = 220
-    # Settle once a provider reports the turn is finished (copy button, actions).
+    # Polling granularity for new-message / stability / settle detection. Kept
+    # tight so a finished reply is noticed quickly instead of up to a full poll
+    # late — the dominant library tail once a done-signal has fired.
+    poll_interval_ms: int = 120
+    # Settle once a provider's done-signal fires (copy button, action toolbar).
     ready_settle_ms: int = 350
+    # Safety net for ``has_ready_signal`` providers: if the done-signal never
+    # fires (e.g. the UI drifted and its selector broke) but the text has sat
+    # completely unchanged this long, return anyway. Long enough that real
+    # streaming never trips it, short enough to bound a broken selector to a few
+    # seconds instead of the full response timeout.
+    ready_fallback_ms: int = 6_000
 
     # Extra args passed to chromium.launch (e.g. ["--no-sandbox"]).
     launch_args: List[str] = field(default_factory=list)
@@ -179,6 +188,11 @@ class BaseProvider:
     assistant_message_selector: str = ""
     #: If set, presence of this selector means "generation in progress".
     streaming_indicator_selector: Optional[str] = None
+    #: True when the provider overrides :meth:`_response_ready` with a reliable
+    #: turn-finished signal. Such providers return on the signal (plus a short
+    #: settle) and never end a reply on the bare stability window, so a
+    #: mid-stream pause is never mistaken for a completed turn.
+    has_ready_signal: bool = False
     #: Selectors whose presence means a login/signup wall (not authenticated).
     login_wall_selectors: List[str] = []
 
@@ -458,7 +472,7 @@ class BaseProvider:
         order = order or ([single] if single else [])
         if order:
             await self.ensure_model(order)
-        before = await self._assistant_count()
+        before = await self._baseline_assistant_count()
 
         await self._fill_input(prompt)
         await self._submit()
@@ -612,6 +626,34 @@ class BaseProvider:
                 log.debug("[%s] send button not clickable, falling back to Enter", self.name)
         await self.page.keyboard.press("Enter")
 
+    async def _baseline_assistant_count(self) -> int:
+        """Count existing assistant turns, waiting out lazy render on cold pages.
+
+        On a freshly-navigated *conversation* page the turn markup can hydrate a
+        beat after load, so reading the count too early returns 0. If the next
+        reply's "new message" check used that stale 0 it would fire the instant
+        the OLD turns render in, and a completed prior turn (its done-signal
+        already satisfied) would be returned instead of the real reply. Wait for
+        the count to settle to a steady non-zero value first. On a warm page the
+        count is already stable, so this costs a single extra poll; on a genuine
+        new-chat page (no prior turns) it returns 0 immediately.
+        """
+        count = await self._assistant_count()
+        try:
+            on_conversation = type(self).is_conversation(self.page.url)
+        except Exception:
+            on_conversation = False
+        if not on_conversation:
+            return count
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            await asyncio.sleep(self.config.poll_interval_ms / 1000)
+            nxt = await self._assistant_count()
+            if nxt == count and count > 0:
+                return count
+            count = nxt
+        return count
+
     async def _wait_for_new_message(self, before_count: int) -> None:
         deadline = time.monotonic() + self.config.response_timeout_ms / 1000
         while time.monotonic() < deadline:
@@ -645,37 +687,70 @@ class BaseProvider:
         return False
 
     async def _wait_for_stable_response(self) -> str:
-        """Poll the newest assistant block until its text stops changing."""
+        """Wait until the newest assistant turn is genuinely finished, then return it.
+
+        Two regimes, chosen by :attr:`has_ready_signal`:
+
+        * **Done-signal providers** return once :meth:`_response_ready` fires and
+          the text has held steady for ``ready_settle_ms``. The bare stability
+          window is NOT used to end the turn, so a mid-stream pause can never be
+          mistaken for completion (no truncation). ``ready_fallback_ms`` of fully
+          unchanged text is a safety net for a drifted/broken signal selector.
+        * **Signal-less providers** fall back to the old behaviour: the text
+          holding steady for ``stability_window_ms`` while no streaming indicator
+          is visible marks the turn done.
+        """
         deadline = time.monotonic() + self.config.response_timeout_ms / 1000
         stability = self.config.stability_window_ms / 1000
+        settle = self.config.ready_settle_ms / 1000
+        fallback = self.config.ready_fallback_ms / 1000
 
         last_text = ""
-        stable_since: Optional[float] = None
+        ready_since: Optional[float] = None   # done-signal held + text steady
+        stable_since: Optional[float] = None  # text unchanged (window / fallback)
         while time.monotonic() < deadline:
             try:
                 text = await self._assistant_text()
             except Exception:
                 text = last_text
-            ready = await self._response_ready()
-            streaming = False if ready else await self._is_streaming()
-            # A finished turn only needs a short pause so the last tokens land.
-            needed = (self.config.ready_settle_ms / 1000) if ready else stability
 
-            if text and ready and text == last_text:
-                # The provider says the turn is done and the text held steady —
-                # return as soon as the short settle elapses, no full window.
-                if stable_since is None:
-                    stable_since = time.monotonic()
-                elif time.monotonic() - stable_since >= needed:
-                    return text
-            elif text and text == last_text and not streaming:
-                if stable_since is None:
-                    stable_since = time.monotonic()
-                elif time.monotonic() - stable_since >= needed:
-                    return text
-            else:
+            if text != last_text:
+                # Any change in the reply resets every timer: still streaming.
                 last_text = text
-                stable_since = None
+                ready_since = stable_since = None
+                await asyncio.sleep(self.config.poll_interval_ms / 1000)
+                continue
+
+            now = time.monotonic()
+            if self.has_ready_signal:
+                if text and await self._response_ready():
+                    # Done-signal fired and the text is steady: settle and return.
+                    if ready_since is None:
+                        ready_since = now
+                    elif now - ready_since >= settle:
+                        return text
+                    stable_since = None
+                else:
+                    ready_since = None
+                    # Safety net: the signal never came but nothing has changed
+                    # for a long time — the UI's done marker likely drifted.
+                    if text:
+                        if stable_since is None:
+                            stable_since = now
+                        elif now - stable_since >= fallback:
+                            log.warning("[%s] done-signal never fired; returning "
+                                        "after %dms of stable text", self.name,
+                                        self.config.ready_fallback_ms)
+                            return text
+            else:
+                streaming = await self._is_streaming()
+                if text and not streaming:
+                    if stable_since is None:
+                        stable_since = now
+                    elif now - stable_since >= stability:
+                        return text
+                else:
+                    stable_since = None
             await asyncio.sleep(self.config.poll_interval_ms / 1000)
 
         if last_text:
