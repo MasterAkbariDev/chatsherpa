@@ -640,6 +640,9 @@ class BaseProvider:
         if (node.nodeType === 3) return node.textContent;
         if (node.nodeType !== 1) return '';
         const tag = node.tagName.toLowerCase();
+        // Drop non-content chrome: code-block toolbars (Copy/Download), icons, etc.
+        if (tag === 'button' || tag === 'svg' || tag === 'style' || tag === 'script') return '';
+        if (node.getAttribute('role') === 'button' || node.getAttribute('aria-hidden') === 'true') return '';
         const kids = () => Array.from(node.childNodes).map(walk).join('');
         switch (tag) {
           case 'br': return '\n';
