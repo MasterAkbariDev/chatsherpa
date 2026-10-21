@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from urllib.parse import urlparse
 
 from ..base import BaseProvider
@@ -38,6 +40,22 @@ class GrokProvider(BaseProvider):
     email_submit_selector = 'button[type="submit"]'
     password_input_selector = 'input[type="password"]'
     password_submit_selector = 'button[type="submit"]'
+
+    async def is_logged_in(self) -> bool:
+        """Grok's SPA can take several seconds to hydrate (slower on a server),
+        and its pre-hydration shell briefly shows a /sign-in link. The composer
+        is the only reliable signal, so poll for it instead of failing early on
+        a transient wall."""
+        deadline = time.monotonic() + max(self.config.login_wait_ms, 15_000) / 1000
+        loc = self.page.locator(self.input_selector)
+        while time.monotonic() < deadline:
+            try:
+                if await loc.count() and await loc.first.is_visible():
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(0.4)
+        return False
 
     async def _after_load(self) -> None:
         page = self.page
