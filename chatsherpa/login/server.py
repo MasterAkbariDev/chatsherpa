@@ -21,8 +21,10 @@ from aiohttp import WSMsgType, web
 from playwright.async_api import async_playwright
 
 from ..base import ProviderConfig
+from ..client import ChatSherpa
 from ..events import ErrorType, Event, EventBus, EventType
-from ..providers import get_provider
+from ..exceptions import LoginRequiredError, RateLimitedError, ResponseTimeoutError
+from ..providers import REGISTRY, get_provider
 from .flow import LoginBroker
 from .remote import LiveStreamer
 
@@ -56,6 +58,9 @@ class LoginServer:
         self.broker = LoginBroker()
         self._pw = None
         self._browser = None
+        # Asks are served from one long-lived bridge, so its browser pool stays
+        # warm between requests instead of starting Chromium for every prompt.
+        self.bridge = ChatSherpa(store=store, bus=self.bus, headless=headless, config=self.config)
 
     # ---------------- browser ----------------
     async def _ensure_browser(self):
@@ -145,6 +150,45 @@ class LoginServer:
         except KeyError as e:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response(info)
+
+    async def _h_api_ask(self, request):
+        """Send one prompt through the warm bridge and return the reply.
+
+        Body: ``{"provider", "prompt", "user_id"?, "chat"?, "new_chat"?, "model"?,
+        "model_order"?, "account"?}``. Reply: ``{"text", "model"}``.
+        """
+        if self.api_secret and request.headers.get("X-ChatSherpa-Secret") != self.api_secret:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "bad json"}, status=400)
+        provider = str(body.get("provider", "")).lower()
+        prompt = body.get("prompt")
+        if provider not in REGISTRY or not isinstance(prompt, str) or not prompt.strip():
+            return web.json_response({"error": "provider and prompt are required"}, status=400)
+        used = {"model": None}
+
+        def on_model(name):
+            used["model"] = name
+
+        try:
+            text = await self.bridge.ask(
+                provider, str(body.get("user_id", "local")), prompt,
+                model=body.get("model"), model_order=body.get("model_order"),
+                new_chat=bool(body.get("new_chat")), account=body.get("account"),
+                on_model=on_model, chat=body.get("chat") or "default",
+            )
+        except LoginRequiredError as exc:
+            return web.json_response({"error": "login_required", "message": str(exc)}, status=401)
+        except RateLimitedError as exc:
+            return web.json_response({"error": "rate_limited", "message": str(exc)}, status=429)
+        except ResponseTimeoutError as exc:
+            return web.json_response({"error": "timeout", "message": str(exc)}, status=504)
+        except Exception as exc:  # noqa: BLE001 - report any provider failure to the caller
+            log.warning("ask failed: %s", exc)
+            return web.json_response({"error": "failed", "message": str(exc)}, status=500)
+        return web.json_response({"text": text, "model": used["model"]})
 
     async def _h_connect(self, request):
         token = request.match_info["token"]
@@ -250,12 +294,17 @@ class LoginServer:
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         return resp
 
+    async def _close_bridge(self, _app) -> None:
+        await self.bridge.aclose()
+
     def app(self) -> web.Application:
         app = web.Application(middlewares=[self._cors])
+        app.on_cleanup.append(self._close_bridge)
         app.add_routes([
             web.get("/healthz", self._h_health),
             web.post("/api/login", self._h_api_login),
             web.post("/api/ingest", self._h_ingest),
+            web.post("/api/ask", self._h_api_ask),
             web.options("/api/ingest", self._h_options),
             web.get("/connect/{token}", self._h_connect),
             web.get("/login/{token}", self._h_viewer),

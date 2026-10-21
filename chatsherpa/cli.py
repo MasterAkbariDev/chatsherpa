@@ -25,7 +25,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from .base import ProviderConfig
 from .client import ChatSherpa
@@ -228,15 +228,75 @@ async def cmd_login(args) -> int:
     return 0
 
 
+def _ask_via_server(args, chat: str, order) -> Optional[dict]:
+    """Send the prompt to the running login server, which keeps its browser warm.
+
+    Returns the server's JSON reply. Returns ``None`` when no server is listening
+    or it has no ``/api/ask`` route (an older install), so the caller runs locally.
+    Once the request has been sent it is never retried locally, so a prompt is
+    never sent twice.
+    """
+    import urllib.error
+    import urllib.request
+    env = _env()
+    base = f"http://127.0.0.1:{env.get('SERVER_PORT', '8080')}"
+    headers = {"Content-Type": "application/json"}
+    if env.get("API_SECRET"):
+        headers["X-ChatSherpa-Secret"] = env["API_SECRET"]
+    try:
+        urllib.request.urlopen(urllib.request.Request(f"{base}/healthz", headers=headers), timeout=1).close()
+    except Exception:
+        return None
+    body = {"provider": args.provider, "prompt": args.prompt,
+            "user_id": getattr(args, "user", None) or "local", "chat": chat,
+            "new_chat": bool(getattr(args, "new", False)), "model": getattr(args, "model", None),
+            "model_order": order, "account": getattr(args, "account", None)}
+    req = urllib.request.Request(f"{base}/api/ask", data=json.dumps(body).encode("utf-8"),
+                                 headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=args.timeout + 30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read().decode("utf-8"))
+        except Exception:
+            return None if exc.code == 404 else {"error": "http", "message": f"HTTP {exc.code}"}
+        return payload if isinstance(payload, dict) and "error" in payload else {"error": "http", "message": f"HTTP {exc.code}"}
+    except Exception as exc:
+        return {"error": "unreachable", "message": f"login server did not answer: {exc}"}
+
+
+def _print_answer(name: str, answer: str, model: Optional[str], elapsed: float) -> None:
+    from rich.panel import Panel
+    from rich.markdown import Markdown
+    style = ui.pstyle(name)
+    label = f"{name} · {model}" if model else name
+    subtitle = f"[{ui.SOFT}]{label} · {elapsed:.1f}s[/]"
+    console.print(Panel(Markdown(answer, code_theme="monokai"), title=str(ui.chip(name)),
+                        subtitle=subtitle, subtitle_align="right",
+                        border_style=style, title_align="left"))
+
+
 async def cmd_ask(args) -> int:
     provider_cls = get_provider(args.provider)
     style = ui.pstyle(provider_cls.name)
-    bridge = _bridge(headless=not args.headful)
-    bridge.config.response_timeout_ms = args.timeout * 1000
     console.print()
     order = [m.strip() for m in args.model_order.split(",")] if getattr(args, "model_order", None) else None
-    used_model = {"name": None}
+    chat = getattr(args, "chat", None) or "default"
     t0 = time.monotonic()
+    if not getattr(args, "local", False):
+        with console.status(f"[{style}]{provider_cls.name} is thinking…", spinner="dots"):
+            remote = await asyncio.to_thread(_ask_via_server, args, chat, order)
+        if remote is not None:
+            if remote.get("error"):
+                ui.fail(remote.get("message") or remote["error"])
+                return 2
+            _print_answer(provider_cls.name, remote.get("text", ""), remote.get("model"),
+                          time.monotonic() - t0)
+            return 0
+    bridge = _bridge(headless=not args.headful)
+    bridge.config.response_timeout_ms = args.timeout * 1000
+    used_model = {"name": None}
     try:
         with console.status(f"[{style}]{provider_cls.name} is thinking…", spinner="dots") as status:
             def on_model(m):
@@ -252,14 +312,7 @@ async def cmd_ask(args) -> int:
         ui.fail(str(exc))
         await bridge.aclose()
         return 2
-    elapsed = time.monotonic() - t0
-    from rich.panel import Panel
-    from rich.markdown import Markdown
-    label = f"{provider_cls.name} · {used_model['name']}" if used_model["name"] else provider_cls.name
-    subtitle = f"[{ui.SOFT}]{label} · {elapsed:.1f}s[/]"
-    console.print(Panel(Markdown(answer, code_theme="monokai"), title=str(ui.chip(provider_cls.name)),
-                        subtitle=subtitle, subtitle_align="right",
-                        border_style=style, title_align="left"))
+    _print_answer(provider_cls.name, answer, used_model["name"], time.monotonic() - t0)
     await bridge.aclose()
     return 0
 
@@ -585,6 +638,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     ak = sub.add_parser("ask"); ak.add_argument("provider", choices=provs); ak.add_argument("prompt")
     ak.add_argument("--headful", action="store_true"); ak.add_argument("--timeout", type=int, default=180)
+    ak.add_argument("--local", action="store_true",
+                    help="run the browser in this process instead of the running login server")
     ak.add_argument("--user", default="local", help="account label to use (default: local)")
     ak.add_argument("--chat", default="default", metavar="NAME",
                     help="named chat to continue for this user (default: 'default'); a new name starts a new chat")
