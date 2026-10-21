@@ -290,7 +290,7 @@ class BaseProvider:
 
     async def start(self) -> "BaseProvider":
         launch_headless = self.config.headless
-        if self.config.headless and self._display.start_if_needed():
+        if self._display.start_if_needed():
             launch_headless = False
         log.info("[%s] launching chromium (headless=%s)", self.name, launch_headless)
         self._pw = await async_playwright().start()
