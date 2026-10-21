@@ -20,6 +20,8 @@ _ENTRY = re.compile(r"/(?:u/\d+/)?app/?")
 class GeminiProvider(BaseProvider):
     name = "gemini"
     home_url = "https://gemini.google.com/app"
+    # Google answers the datacenter IP with a 403 page; that is a block, not a login.
+    challenge_markers = ("Error 403 (Forbidden)", "does not have permission to get URL")
 
     @classmethod
     def account_index(cls, url: str) -> Optional[int]:

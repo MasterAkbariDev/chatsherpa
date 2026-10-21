@@ -46,7 +46,7 @@ class GrokProvider(BaseProvider):
         and its pre-hydration shell briefly shows a /sign-in link. The composer
         is the only reliable signal, so poll for it instead of failing early on
         a transient wall."""
-        deadline = time.monotonic() + max(self.config.login_wait_ms, 15_000) / 1000
+        deadline = time.monotonic() + max(self.config.login_wait_ms, 60_000) / 1000
         loc = self.page.locator(self.input_selector)
         while time.monotonic() < deadline:
             try:

@@ -364,8 +364,10 @@ class BaseProvider:
         if not self.input_selector:
             return True
         try:
+            # A cold browser needs about 35-60s before the composer renders (measured
+            # on the VPS); the 8s login_wait_ms default reported valid sessions as logged out.
             await page.wait_for_selector(
-                self.input_selector, timeout=self.config.login_wait_ms, state="visible"
+                self.input_selector, timeout=max(self.config.login_wait_ms, 60_000), state="visible"
             )
             return True
         except PWTimeoutError:
