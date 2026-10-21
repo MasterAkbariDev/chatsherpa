@@ -16,7 +16,7 @@ from typing import Optional, Union
 
 from .base import ProviderConfig
 from .events import ErrorType, Event, EventBus, EventType
-from .exceptions import LoginRequiredError, RateLimitedError, ResponseTimeoutError
+from .exceptions import ChatFullError, LoginRequiredError, RateLimitedError, ResponseTimeoutError
 from .login.local import local_login
 from .pool import BrowserPool
 from .providers import get_provider
@@ -77,6 +77,10 @@ class ChatSherpa:
         if new_chat:
             await self.pool.drop(uid, provider_cls.name)
         thread = None if new_chat else await self.store.get_thread(uid, provider_cls.name, chat)
+        if thread is None:
+            # A chat with no saved URL is a new conversation. Do not reuse the page
+            # that is open on some other chat.
+            await self.pool.drop(uid, provider_cls.name)
         if account is not None and hasattr(provider_cls, "account_home"):
             same = thread and provider_cls.account_index(thread) == account
             if not same:
@@ -94,6 +98,9 @@ class ChatSherpa:
             raise
         except ResponseTimeoutError as exc:
             await self._error(provider_cls.name, uid, ErrorType.RESPONSE_TIMEOUT, str(exc))
+            raise
+        except ChatFullError as exc:
+            await self._error(provider_cls.name, uid, ErrorType.CHAT_FULL, str(exc))
             raise
         except RateLimitedError as exc:
             await self._error(provider_cls.name, uid, ErrorType.RATE_LIMITED, str(exc))

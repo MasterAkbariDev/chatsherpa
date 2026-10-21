@@ -27,5 +27,10 @@ class RateLimitedError(ProviderError):
     demand", "You've reached your limit", "at capacity")."""
 
 
+class ChatFullError(ProviderError):
+    """The provider refuses new messages in this chat (for example ChatGPT's
+    "Chat memory full"). Start a new chat instead of retrying this one."""
+
+
 class SessionError(BridgeError):
     """A session source could not be parsed or loaded."""

@@ -16,6 +16,9 @@ MemoryMax=350M
 NoNewPrivileges=true
 ProtectSystem=strict
 ReadWritePaths=/opt/chatsherpa/sessions
+# Playwright creates its profile and artifact folders under /tmp, which is read-only
+# under ProtectSystem=strict. A private /tmp gives the browser a writable one.
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target

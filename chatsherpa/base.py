@@ -25,7 +25,7 @@ from playwright.async_api import (
 )
 
 from .display import VirtualDisplay
-from .exceptions import LoginRequiredError, RateLimitedError, ResponseTimeoutError
+from .exceptions import ChatFullError, LoginRequiredError, RateLimitedError, ResponseTimeoutError
 from .session import Session, SessionSource
 
 log = logging.getLogger("chatsherpa")
@@ -216,6 +216,12 @@ class BaseProvider:
     #: settle) and never end a reply on the bare stability window, so a
     #: mid-stream pause is never mistaken for a completed turn.
     has_ready_signal: bool = False
+    # Seconds to wait for a sent message to show up in the chat before sending it
+    # once more. Well under the response timeout, so a lost send is retried early.
+    SEND_CONFIRM_S: float = 30.0
+    # Page text that means this chat can take no more messages, for example
+    # ChatGPT's "Chat memory full". Matched against the visible page text.
+    chat_full_markers: tuple = ()
     #: Selectors whose presence means a login/signup wall (not authenticated).
     login_wall_selectors: List[str] = []
 
@@ -491,6 +497,11 @@ class BaseProvider:
         is called once with the model name actually in use (for live status).
         """
         await self.ensure_logged_in()
+        try:
+            await self.page.locator(self.input_selector).last.wait_for(state="visible", timeout=60_000)
+        except Exception:
+            pass
+        await self._raise_if_chat_full()
         order = model_order if model_order is not None else self.config.model_order
         single = model if model is not None else self.config.model
         order = order or ([single] if single else [])
@@ -506,7 +517,18 @@ class BaseProvider:
 
         await self._fill_input(prompt)
         await self._submit()
-        await self._wait_for_new_message(before)
+        try:
+            await self._wait_for_new_message(before, timeout_s=self.SEND_CONFIRM_S)
+        except ResponseTimeoutError:
+            # Nothing new reached the chat, so the message did not register.
+            # Clear the composer and send once more; this cannot duplicate a
+            # message because the chat still has no new turn.
+            log.warning("[%s] message did not register (%s); sending once more",
+                        self.name, await self._composer_state())
+            await self._clear_input()
+            await self._fill_input(prompt)
+            await self._submit()
+            await self._wait_for_new_message(before)
         text = await self._wait_for_stable_response()
         result = (await self._assistant_markdown()) or text
         self._raise_if_busy(result)
@@ -757,15 +779,69 @@ class BaseProvider:
             count = nxt
         return count
 
-    async def _wait_for_new_message(self, before_count: int) -> None:
-        deadline = time.monotonic() + self.config.response_timeout_ms / 1000
+    async def _wait_for_new_message(self, before_count: int, timeout_s: Optional[float] = None) -> None:
+        wait = self.config.response_timeout_ms / 1000 if timeout_s is None else timeout_s
+        deadline = time.monotonic() + wait
         while time.monotonic() < deadline:
-            if await self._assistant_count() > before_count:
+            if await self._assistant_count() > before_count and await self._send_registered():
                 return
             await asyncio.sleep(self.config.poll_interval_ms / 1000)
+        await self._raise_if_chat_full()
         raise ResponseTimeoutError(
-            f"[{self.name}] no new assistant message appeared."
+            f"[{self.name}] no new assistant message appeared (page: {self.page.url})."
         )
+
+    async def _send_registered(self) -> bool:
+        """Provider hook: True once the sent message is actually in the chat.
+
+        The default trusts the new-turn count. A provider whose page can show an
+        older reply as new (or where a send silently fails) overrides this.
+        """
+        return True
+
+    async def _page_text(self) -> str:
+        try:
+            return await self.page.evaluate("() => document.body ? document.body.innerText : ''")
+        except Exception:
+            return ""
+
+    async def _raise_if_chat_full(self) -> None:
+        if not self.chat_full_markers:
+            return
+        text = await self._page_text()
+        for marker in self.chat_full_markers:
+            if marker in text:
+                raise ChatFullError(
+                    f"[{self.name}] this chat is full on the provider's side ({marker!r}). "
+                    f"Start a new chat: pass a new --chat name, or --new to reset this one."
+                )
+
+    async def _composer_state(self) -> str:
+        """One-line description of the composer and send control, for logs."""
+        try:
+            text = await self.page.locator(self.input_selector).last.evaluate(
+                "e => (e.innerText || e.value || '').trim()")
+        except Exception as exc:
+            return f"composer unreadable: {type(exc).__name__}"
+        state = f"composer chars={len(text)}"
+        if self.send_button_selector:
+            try:
+                btn = self.page.locator(self.send_button_selector).last
+                visible = await btn.is_visible()
+                enabled = await btn.is_enabled() if visible else False
+                state += f", send visible={visible} enabled={enabled}"
+            except Exception:
+                state += ", send unreadable"
+        return state
+
+    async def _clear_input(self) -> None:
+        """Empty the composer so a resend does not append to a half-typed prompt."""
+        try:
+            await self.page.locator(self.input_selector).last.click()
+            await self.page.keyboard.press("ControlOrMeta+A")
+            await self.page.keyboard.press("Delete")
+        except Exception:
+            pass
 
     async def _is_streaming(self) -> bool:
         """True only when a stop control is actually visible, not merely in the DOM."""

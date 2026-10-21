@@ -29,7 +29,7 @@ import urllib.request
 from typing import Dict, Optional, Union
 
 from ..client import ChatSherpa
-from ..exceptions import LoginRequiredError
+from ..exceptions import ChatFullError, LoginRequiredError
 from ..store import DEFAULT_CHAT
 
 log = logging.getLogger("chatsherpa.integrations.telegram")
@@ -132,6 +132,9 @@ class TelegramBridge:
         provider = self.provider_for(uid)
         try:
             return await self.bridge.ask(provider, uid, message, chat=self.chat_for(uid))
+        except ChatFullError:
+            return (f"This {provider} chat is full. Start a new one with "
+                    f"/{self.prefix}_chat <new name>, then send your message again.")
         except LoginRequiredError:
             return (f"Your {provider} session has expired. "
                     f"Run /{self.cmd_login} {provider} to sign in again.")

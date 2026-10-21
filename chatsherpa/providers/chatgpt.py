@@ -36,6 +36,19 @@ class ChatGPTProvider(BaseProvider):
     assistant_message_selector = '[data-message-author-role="assistant"]'
     streaming_indicator_selector = 'button[data-testid="stop-button"], button[aria-label="Stop streaming"]'
     model_picker_selector = '[data-testid="model-switcher-dropdown-button"]'
+    async def _send_registered(self) -> bool:
+        """ChatGPT empties the composer when a message is sent. If the prompt is
+        still there, the send did not happen, so an older reply must not be taken
+        as the answer."""
+        try:
+            text = await self.page.locator(self.input_selector).last.evaluate(
+                "e => (e.innerText || e.value || '').trim()")
+        except Exception:
+            return True
+        return text == ""
+
+    # The composer locks with this banner once a chat is full.
+    chat_full_markers = ("Chat memory full",)
 
     # ChatGPT's turn markup is obfuscated (no stable data-role/class). The one
     # durable anchor is the screen-reader label "ChatGPT said:". Count and read
@@ -158,7 +171,10 @@ class ChatGPTProvider(BaseProvider):
         The logged-out page shows a login button immediately, including while a
         valid session is still hydrating, so that button is not a final answer.
         """
-        deadline = time.monotonic() + max(self.config.login_wait_ms, 20_000) / 1000
+        # A cold browser needs about 35s before the signed-in UI and session API
+        # respond (measured on the VPS), so a 20s window reported logged-in
+        # sessions as "not authenticated".
+        deadline = time.monotonic() + max(self.config.login_wait_ms, 60_000) / 1000
         while True:
             try:
                 if await self.page.evaluate(self._SESSION_JS):

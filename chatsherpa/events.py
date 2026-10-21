@@ -41,6 +41,7 @@ class ErrorType(str, enum.Enum):
     RESPONSE_TIMEOUT = "ResponseTimeout"
     SELECTOR_MISS = "SelectorMiss"
     RATE_LIMITED = "RateLimited"
+    CHAT_FULL = "ChatFull"
     UNKNOWN = "Unknown"
 
 

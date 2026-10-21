@@ -31,20 +31,29 @@ class VirtualDisplay:
             return False
         if self._proc and self._proc.poll() is None:
             return True
-        number = _free_display()
-        name = f":{number}"
-        self._proc = subprocess.Popen(
-            ["Xvfb", name, "-screen", "0", "1280x800x24", "-nolisten", "tcp"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        sock = Path(f"/tmp/.X11-unix/X{number}")
-        for _ in range(40):
-            if sock.exists() and self._proc.poll() is None:
-                os.environ["DISPLAY"] = name
-                return True
-            time.sleep(0.05)
-        self.stop()
+        # X servers also listen on an abstract socket that a private /tmp does not
+        # isolate, so a number can be held by a server this process cannot see.
+        # Try the next number whenever one fails to come up.
+        for number in range(99, 120):
+            sock = Path(f"/tmp/.X11-unix/X{number}")
+            if sock.exists():
+                continue
+            name = f":{number}"
+            proc = subprocess.Popen(
+                ["Xvfb", name, "-screen", "0", "1280x800x24", "-nolisten", "tcp"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            for _ in range(100):  # up to ~5s for the display to come up
+                if proc.poll() is not None:
+                    break
+                if sock.exists():
+                    self._proc = proc
+                    os.environ["DISPLAY"] = name
+                    return True
+                time.sleep(0.05)
+            if proc.poll() is None:
+                proc.kill()
         return False
 
     def stop(self) -> None:
@@ -59,8 +68,3 @@ class VirtualDisplay:
             proc.kill()
 
 
-def _free_display() -> int:
-    for number in range(99, 200):
-        if not Path(f"/tmp/.X11-unix/X{number}").exists():
-            return number
-    return 99
