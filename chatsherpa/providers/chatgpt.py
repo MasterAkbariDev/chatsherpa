@@ -44,13 +44,19 @@ class ChatGPTProvider(BaseProvider):
         "() => [...document.querySelectorAll('.sr-only')]"
         ".filter(h => h.textContent.trim().startsWith('ChatGPT said:')).length"
     )
+    # Read ONLY the message body (.markdown), not the whole turn — the turn also
+    # holds the toolbar and a late-loading ad/promo whose text churn otherwise
+    # keeps the reply from ever looking "finished".
     _TEXT_JS = """() => {
         const labels = [...document.querySelectorAll('.sr-only')]
             .filter(h => h.textContent.trim().startsWith('ChatGPT said:'));
         if (!labels.length) return '';
-        const last = labels[labels.length - 1];
-        const turn = last.closest('[data-turn-key]') || last.parentElement;
-        let txt = turn ? turn.innerText : '';
+        const turn = labels[labels.length - 1].closest('[data-turn-key]')
+            || labels[labels.length - 1].parentElement;
+        if (!turn) return '';
+        const md = turn.querySelector('.markdown, [data-message-author-role="assistant"] .markdown');
+        if (md) return md.innerText.trim();
+        let txt = turn.innerText;
         const i = txt.lastIndexOf('ChatGPT said:');
         if (i >= 0) txt = txt.slice(i + 'ChatGPT said:'.length);
         return txt.trim();
@@ -72,8 +78,10 @@ class ChatGPTProvider(BaseProvider):
         const labels = [...document.querySelectorAll('.sr-only')]
             .filter(h => h.textContent.trim().startsWith('ChatGPT said:'));
         if (!labels.length) return null;
-        return labels[labels.length - 1].closest('[data-turn-key]')
+        const turn = labels[labels.length - 1].closest('[data-turn-key]')
             || labels[labels.length - 1].parentElement;
+        if (!turn) return null;
+        return turn.querySelector('.markdown') || turn;
     }"""
 
     async def _assistant_markdown(self) -> str:

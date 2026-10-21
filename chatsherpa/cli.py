@@ -235,9 +235,12 @@ async def cmd_ask(args) -> int:
     bridge.config.response_timeout_ms = args.timeout * 1000
     console.print()
     order = [m.strip() for m in args.model_order.split(",")] if getattr(args, "model_order", None) else None
+    used_model = {"name": None}
+    t0 = time.monotonic()
     try:
         with console.status(f"[{style}]{provider_cls.name} is thinking…", spinner="dots") as status:
             def on_model(m):
+                used_model["name"] = m
                 status.update(f"[{style}]{provider_cls.name}[/] [{ui.SOFT}]·[/] [{style}]{m}[/] is thinking…")
             answer = await bridge.ask(provider_cls.name, getattr(args, "user", None) or "local", args.prompt,
                                       model=getattr(args, "model", None), model_order=order,
@@ -248,9 +251,13 @@ async def cmd_ask(args) -> int:
         ui.fail(str(exc))
         await bridge.aclose()
         return 2
+    elapsed = time.monotonic() - t0
     from rich.panel import Panel
     from rich.markdown import Markdown
-    console.print(Panel(Markdown(answer), title=str(ui.chip(provider_cls.name)),
+    label = f"{provider_cls.name} · {used_model['name']}" if used_model["name"] else provider_cls.name
+    subtitle = f"[{ui.SOFT}]{label} · {elapsed:.1f}s[/]"
+    console.print(Panel(Markdown(answer, code_theme="monokai"), title=str(ui.chip(provider_cls.name)),
+                        subtitle=subtitle, subtitle_align="right",
                         border_style=style, title_align="left"))
     await bridge.aclose()
     return 0
