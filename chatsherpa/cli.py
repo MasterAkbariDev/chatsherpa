@@ -236,11 +236,14 @@ async def cmd_ask(args) -> int:
     console.print()
     order = [m.strip() for m in args.model_order.split(",")] if getattr(args, "model_order", None) else None
     try:
-        with console.status(f"[{style}]{provider_cls.name} is thinking…", spinner="dots"):
+        with console.status(f"[{style}]{provider_cls.name} is thinking…", spinner="dots") as status:
+            def on_model(m):
+                status.update(f"[{style}]{provider_cls.name}[/] [{ui.SOFT}]·[/] [{style}]{m}[/] is thinking…")
             answer = await bridge.ask(provider_cls.name, getattr(args, "user", None) or "local", args.prompt,
                                       model=getattr(args, "model", None), model_order=order,
                                       new_chat=getattr(args, "new", False),
-                                      account=getattr(args, "account", None))
+                                      account=getattr(args, "account", None),
+                                      on_model=on_model)
     except Exception as exc:
         ui.fail(str(exc))
         await bridge.aclose()

@@ -59,7 +59,8 @@ class ChatSherpa:
                   model: Optional[str] = None,
                   model_order: Optional[list] = None,
                   new_chat: bool = False,
-                  account: Optional[int] = None) -> str:
+                  account: Optional[int] = None,
+                  on_model=None) -> str:
         provider_cls = get_provider(provider)
         uid = str(user_id)
         session = await self.store.get(uid, provider_cls.name)
@@ -80,7 +81,7 @@ class ChatSherpa:
         lease = await self.pool.lease(provider_cls, session, uid, start_url=thread)
         try:
             async with lease as prov:
-                text = await prov.send(prompt, model=model, model_order=model_order)
+                text = await prov.send(prompt, model=model, model_order=model_order, on_model=on_model)
                 await self._remember_thread(provider_cls, uid, prov.page)
         except LoginRequiredError as exc:
             await self.pool.drop(uid, provider_cls.name)

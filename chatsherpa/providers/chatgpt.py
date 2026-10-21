@@ -68,6 +68,29 @@ class ChatGPTProvider(BaseProvider):
         except Exception:
             return ""
 
+    _TURN_EL_JS = """() => {
+        const labels = [...document.querySelectorAll('.sr-only')]
+            .filter(h => h.textContent.trim().startsWith('ChatGPT said:'));
+        if (!labels.length) return null;
+        return labels[labels.length - 1].closest('[data-turn-key]')
+            || labels[labels.length - 1].parentElement;
+    }"""
+
+    async def _assistant_markdown(self) -> str:
+        try:
+            handle = await self.page.evaluate_handle(self._TURN_EL_JS)
+            md = await self.page.evaluate(self._MD_JS, handle)
+            if md:
+                i = md.find("ChatGPT said:")
+                if i >= 0:
+                    md = md[i + len("ChatGPT said:"):]
+                md = md.strip()
+                if md:
+                    return md
+        except Exception:
+            pass
+        return await self._assistant_text()
+
     # Copy appears on a turn only after generation finishes. A hidden stop
     # button left in the DOM must not keep the CLI waiting.
     _TURN_DONE_JS = """() => {

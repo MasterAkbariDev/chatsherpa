@@ -461,26 +461,34 @@ class BaseProvider:
     ]
 
     async def send(self, prompt: str, model: Optional[str] = None,
-                   model_order: Optional[List[str]] = None) -> str:
-        """Type ``prompt``, submit, wait for the reply, return its text.
+                   model_order: Optional[List[str]] = None, on_model=None) -> str:
+        """Type ``prompt``, submit, wait for the reply, return it as Markdown.
 
-        ``model`` / ``model_order`` override the config for this call.
+        ``model`` / ``model_order`` override the config for this call. ``on_model``
+        is called once with the model name actually in use (for live status).
         """
         await self.ensure_logged_in()
         order = model_order if model_order is not None else self.config.model_order
         single = model if model is not None else self.config.model
         order = order or ([single] if single else [])
-        if order:
-            await self.ensure_model(order)
+        selected = await self.ensure_model(order) if order else None
+        if on_model:
+            try:
+                name = selected or await self.current_model()
+                if name:
+                    on_model(name)
+            except Exception:
+                pass
         before = await self._baseline_assistant_count()
 
         await self._fill_input(prompt)
         await self._submit()
         await self._wait_for_new_message(before)
         text = await self._wait_for_stable_response()
-        self._raise_if_busy(text)
-        log.info("[%s] received %d chars", self.name, len(text))
-        return text
+        result = (await self._assistant_markdown()) or text
+        self._raise_if_busy(result)
+        log.info("[%s] received %d chars", self.name, len(result))
+        return result
 
     def _raise_if_busy(self, text: str) -> None:
         low = text.lower()
@@ -605,6 +613,78 @@ class BaseProvider:
             return (await loc.inner_text()).strip()
         except Exception:
             return ""
+
+    async def current_model(self) -> Optional[str]:
+        """Best-effort name of the model the UI currently has selected, read from
+        the model-picker button without opening the menu. Cheap; may be None."""
+        if not self.model_picker_selector:
+            return None
+        try:
+            btn = self.page.locator(self.model_picker_selector).first
+            if not await btn.count():
+                return None
+            label = (await btn.inner_text() or "") or (await btn.get_attribute("aria-label") or "")
+            label = label.replace("\n", " ").strip()
+            for pre in ("Model:", "Model", "current model", "Current model"):
+                if label.lower().startswith(pre.lower()):
+                    label = label[len(pre):].strip(" :")
+            return label or None
+        except Exception:
+            return None
+
+    # Serialize a DOM element to Markdown so replies keep structure (code blocks,
+    # quotes, lists, links, images) instead of flattening to plain text.
+    _MD_JS = r"""(el) => {
+      if (!el) return '';
+      const walk = (node) => {
+        if (node.nodeType === 3) return node.textContent;
+        if (node.nodeType !== 1) return '';
+        const tag = node.tagName.toLowerCase();
+        const kids = () => Array.from(node.childNodes).map(walk).join('');
+        switch (tag) {
+          case 'br': return '\n';
+          case 'strong': case 'b': return '**' + kids() + '**';
+          case 'em': case 'i': return '*' + kids() + '*';
+          case 'code':
+            if (node.closest('pre')) return node.textContent;
+            return '`' + node.textContent + '`';
+          case 'pre': {
+            const codeEl = node.querySelector('code');
+            const m = codeEl && (codeEl.className.match(/language-([\w+-]+)/) || []);
+            const lang = (m && m[1]) || '';
+            return '\n```' + lang + '\n' + node.innerText.replace(/\n+$/, '') + '\n```\n';
+          }
+          case 'blockquote':
+            return '\n' + node.innerText.split('\n').map(l => '> ' + l).join('\n') + '\n';
+          case 'h1': return '\n# ' + kids().trim() + '\n';
+          case 'h2': return '\n## ' + kids().trim() + '\n';
+          case 'h3': return '\n### ' + kids().trim() + '\n';
+          case 'h4': case 'h5': case 'h6': return '\n#### ' + kids().trim() + '\n';
+          case 'ul': return '\n' + Array.from(node.children).map(li => '- ' + walk(li).trim()).join('\n') + '\n';
+          case 'ol': return '\n' + Array.from(node.children).map((li, i) => (i + 1) + '. ' + walk(li).trim()).join('\n') + '\n';
+          case 'li': return kids();
+          case 'a': { const h = node.getAttribute('href'); const t = kids().trim(); return h ? '[' + t + '](' + h + ')' : t; }
+          case 'img': { const s = node.getAttribute('src') || ''; const a = node.getAttribute('alt') || 'image'; return '![' + a + '](' + s + ')'; }
+          case 'hr': return '\n---\n';
+          case 'p': case 'div': return kids() + '\n';
+          default: return kids();
+        }
+      };
+      return walk(el).replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    }"""
+
+    async def _assistant_markdown(self) -> str:
+        """The latest reply as Markdown (structure preserved). Falls back to text."""
+        try:
+            loc = self.page.locator(self.assistant_message_selector).last
+            if await loc.count():
+                handle = await loc.element_handle()
+                md = await self.page.evaluate(self._MD_JS, handle)
+                if md and md.strip():
+                    return md.strip()
+        except Exception:
+            pass
+        return await self._assistant_text()
 
     async def _fill_input(self, text: str) -> None:
         el = self.page.locator(self.input_selector).last
