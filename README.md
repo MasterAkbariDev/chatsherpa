@@ -64,7 +64,9 @@ them. Gemini's several Google logins in one session use `ask --account N`.
 
 ## More
 
-- **Login server, Telegram bots, multiple accounts, deploying to a VPS** →
+- **Full guide: every command and option, the library, Telegram bots, login
+  server, deployment** → [docs/GUIDE.md](docs/GUIDE.md)
+- **Short reference for sessions, the login server and deploys** →
   [docs/USAGE.md](docs/USAGE.md)
 - **Browser extension** (connect-mode capture) → [extension/](extension/)
 - **Examples** → [examples/](examples/)
