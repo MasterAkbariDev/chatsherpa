@@ -29,7 +29,7 @@ import urllib.request
 from typing import Dict, Optional, Union
 
 from ..client import ChatSherpa
-from ..exceptions import ChatFullError, LoginRequiredError
+from ..exceptions import BotChallengeError, BrowserUnavailableError, ChatFullError, LoginRequiredError
 from ..store import DEFAULT_CHAT
 
 log = logging.getLogger("chatsherpa.integrations.telegram")
@@ -132,6 +132,10 @@ class TelegramBridge:
         provider = self.provider_for(uid)
         try:
             return await self.bridge.ask(provider, uid, message, chat=self.chat_for(uid))
+        except BotChallengeError:
+            return f"{provider} is blocking automated access right now. Please try again later."
+        except BrowserUnavailableError:
+            return "The assistant's browser is unavailable right now. Please try again later."
         except ChatFullError:
             return (f"This {provider} chat is full. Start a new one with "
                     f"/{self.prefix}_chat <new name>, then send your message again.")

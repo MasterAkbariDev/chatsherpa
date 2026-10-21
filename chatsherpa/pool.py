@@ -18,6 +18,7 @@ from playwright.async_api import Browser, BrowserContext, Page, Playwright, asyn
 
 from .base import BaseProvider, ProviderConfig
 from .display import VirtualDisplay
+from .exceptions import BrowserUnavailableError
 from .session import Session
 
 log = logging.getLogger("chatsherpa.pool")
@@ -76,12 +77,21 @@ class BrowserPool:
             launch_headless = self.headless
             if self.headless and self._display.start_if_needed():
                 launch_headless = False
-            self._pw = await async_playwright().start()
-            self._browser = await self._pw.chromium.launch(
-                headless=launch_headless,
-                args=[*self.config.launch_args, "--disable-blink-features=AutomationControlled"],
-                ignore_default_args=["--enable-automation"],
-            )
+            try:
+                self._pw = await async_playwright().start()
+                self._browser = await self._pw.chromium.launch(
+                    headless=launch_headless,
+                    args=[*self.config.launch_args, "--disable-blink-features=AutomationControlled"],
+                    ignore_default_args=["--enable-automation"],
+                )
+            except Exception as exc:
+                if self._pw:
+                    await self._pw.stop()
+                    self._pw = None
+                raise BrowserUnavailableError(
+                    f"browser could not start: {exc}. Check free disk space, /tmp, and the "
+                    "Chromium install (python -m playwright install chromium)."
+                ) from exc
             log.info("browser pool started (headless=%s)", launch_headless)
 
     async def close(self) -> None:

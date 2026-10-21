@@ -42,6 +42,8 @@ class ErrorType(str, enum.Enum):
     SELECTOR_MISS = "SelectorMiss"
     RATE_LIMITED = "RateLimited"
     CHAT_FULL = "ChatFull"
+    BOT_CHALLENGE = "BotChallenge"
+    BROWSER_UNAVAILABLE = "BrowserUnavailable"
     UNKNOWN = "Unknown"
 
 

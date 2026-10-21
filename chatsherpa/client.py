@@ -16,7 +16,14 @@ from typing import Optional, Union
 
 from .base import ProviderConfig
 from .events import ErrorType, Event, EventBus, EventType
-from .exceptions import ChatFullError, LoginRequiredError, RateLimitedError, ResponseTimeoutError
+from .exceptions import (
+    BotChallengeError,
+    BrowserUnavailableError,
+    ChatFullError,
+    LoginRequiredError,
+    RateLimitedError,
+    ResponseTimeoutError,
+)
 from .login.local import local_login
 from .pool import BrowserPool
 from .providers import get_provider
@@ -98,6 +105,12 @@ class ChatSherpa:
             raise
         except ResponseTimeoutError as exc:
             await self._error(provider_cls.name, uid, ErrorType.RESPONSE_TIMEOUT, str(exc))
+            raise
+        except BotChallengeError as exc:
+            await self._error(provider_cls.name, uid, ErrorType.BOT_CHALLENGE, str(exc))
+            raise
+        except BrowserUnavailableError as exc:
+            await self._error(provider_cls.name, uid, ErrorType.BROWSER_UNAVAILABLE, str(exc))
             raise
         except ChatFullError as exc:
             await self._error(provider_cls.name, uid, ErrorType.CHAT_FULL, str(exc))

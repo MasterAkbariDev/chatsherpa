@@ -23,7 +23,14 @@ from playwright.async_api import async_playwright
 from ..base import ProviderConfig
 from ..client import ChatSherpa
 from ..events import ErrorType, Event, EventBus, EventType
-from ..exceptions import ChatFullError, LoginRequiredError, RateLimitedError, ResponseTimeoutError
+from ..exceptions import (
+    BotChallengeError,
+    BrowserUnavailableError,
+    ChatFullError,
+    LoginRequiredError,
+    RateLimitedError,
+    ResponseTimeoutError,
+)
 from ..providers import REGISTRY, get_provider
 from .flow import LoginBroker
 from .remote import LiveStreamer
@@ -181,6 +188,10 @@ class LoginServer:
             )
         except LoginRequiredError as exc:
             return web.json_response({"error": "login_required", "message": str(exc)}, status=401)
+        except BotChallengeError as exc:
+            return web.json_response({"error": "bot_challenge", "message": str(exc)}, status=503)
+        except BrowserUnavailableError as exc:
+            return web.json_response({"error": "browser_unavailable", "message": str(exc)}, status=503)
         except ChatFullError as exc:
             return web.json_response({"error": "chat_full", "message": str(exc)}, status=409)
         except RateLimitedError as exc:

@@ -25,7 +25,13 @@ from playwright.async_api import (
 )
 
 from .display import VirtualDisplay
-from .exceptions import ChatFullError, LoginRequiredError, RateLimitedError, ResponseTimeoutError
+from .exceptions import (
+    BotChallengeError,
+    ChatFullError,
+    LoginRequiredError,
+    RateLimitedError,
+    ResponseTimeoutError,
+)
 from .session import Session, SessionSource
 
 log = logging.getLogger("chatsherpa")
@@ -365,8 +371,18 @@ class BaseProvider:
         except PWTimeoutError:
             return False
 
+    #: Page text of a bot check (Cloudflare and similar). Seen as "not logged in"
+    #: unless recognised, which sends the user to sign in for no reason.
+    challenge_markers: tuple = ("Just a moment", "Verify you are human", "Checking your browser")
+
     async def ensure_logged_in(self) -> None:
         if not await self.is_logged_in():
+            text = await self._page_text()
+            if any(m in text for m in self.challenge_markers):
+                raise BotChallengeError(
+                    f"[{self.name}] blocked by a bot check at {self.page.url}. This is the "
+                    "server's browser or IP, not the login: run it headed (Xvfb) or from another IP."
+                )
             raise LoginRequiredError(
                 f"[{self.name}] not authenticated at {self.page.url}. "
                 "Capture/refresh the session (storageState or cookies)."
@@ -801,7 +817,8 @@ class BaseProvider:
 
     async def _page_text(self) -> str:
         try:
-            return await self.page.evaluate("() => document.body ? document.body.innerText : ''")
+            return await self.page.evaluate(
+                "() => (document.title || '') + '\\n' + (document.body ? document.body.innerText : '')")
         except Exception:
             return ""
 

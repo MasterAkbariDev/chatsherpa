@@ -32,5 +32,15 @@ class ChatFullError(ProviderError):
     "Chat memory full"). Start a new chat instead of retrying this one."""
 
 
+class BotChallengeError(ProviderError):
+    """The provider's bot check (for example Cloudflare's "Just a moment...") is
+    blocking the browser. This is about the browser and its IP, not the login."""
+
+
+class BrowserUnavailableError(ProviderError):
+    """The browser could not start: no Chromium, a read-only or full disk, or a
+    display problem. Fix the server, not the session."""
+
+
 class SessionError(BridgeError):
     """A session source could not be parsed or loaded."""
