@@ -20,7 +20,7 @@ from .exceptions import LoginRequiredError, RateLimitedError, ResponseTimeoutErr
 from .login.local import local_login
 from .pool import BrowserPool
 from .providers import get_provider
-from .store import DEFAULT_USER, MemorySessionStore, SessionStore
+from .store import DEFAULT_CHAT, DEFAULT_USER, MemorySessionStore, SessionStore
 
 log = logging.getLogger("chatsherpa.client")
 
@@ -60,7 +60,12 @@ class ChatSherpa:
                   model_order: Optional[list] = None,
                   new_chat: bool = False,
                   account: Optional[int] = None,
-                  on_model=None) -> str:
+                  on_model=None, chat: str = DEFAULT_CHAT) -> str:
+        """Send ``prompt`` into the user's named ``chat``.
+
+        A chat that already exists is continued; a new name starts a fresh
+        conversation and is saved under that name. ``new_chat`` resets it first.
+        """
         provider_cls = get_provider(provider)
         uid = str(user_id)
         session = await self.store.get(uid, provider_cls.name)
@@ -71,7 +76,7 @@ class ChatSherpa:
 
         if new_chat:
             await self.pool.drop(uid, provider_cls.name)
-        thread = None if new_chat else await self.store.get_thread(uid, provider_cls.name)
+        thread = None if new_chat else await self.store.get_thread(uid, provider_cls.name, chat)
         if account is not None and hasattr(provider_cls, "account_home"):
             same = thread and provider_cls.account_index(thread) == account
             if not same:
@@ -82,7 +87,7 @@ class ChatSherpa:
         try:
             async with lease as prov:
                 text = await prov.send(prompt, model=model, model_order=model_order, on_model=on_model)
-                await self._remember_thread(provider_cls, uid, prov.page)
+                await self._remember_thread(provider_cls, uid, prov.page, chat)
         except LoginRequiredError as exc:
             await self.pool.drop(uid, provider_cls.name)
             await self._error(provider_cls.name, uid, ErrorType.LOGIN_REQUIRED, str(exc))
@@ -109,15 +114,19 @@ class ChatSherpa:
         await self.bus.emit(Event(EventType.LOGIN_SUCCEEDED, provider=provider_cls.name,
                                   user_id=str(user_id)))
 
-    async def _remember_thread(self, provider_cls, user_id: str, page) -> None:
-        """Keep the chat URL so the next ask continues it instead of opening a new one."""
+    async def _remember_thread(self, provider_cls, user_id: str, page, chat: str = DEFAULT_CHAT) -> None:
+        """Keep the chat URL under ``chat`` so the next ask continues it instead of opening a new one."""
         deadline = time.monotonic() + 3
         url = page.url
         while not provider_cls.is_conversation(url) and time.monotonic() < deadline:
             await asyncio.sleep(0.25)
             url = page.url
         if provider_cls.is_conversation(url):
-            await self.store.put_thread(user_id, provider_cls.name, url)
+            await self.store.put_thread(user_id, provider_cls.name, url, chat)
+
+    async def list_chats(self, provider: str, user_id: UserId = DEFAULT_USER) -> dict:
+        """Saved chats for this user and provider, as ``{name: url}``."""
+        return await self.store.list_threads(str(user_id), get_provider(provider).name)
 
     async def list_models(self, provider: str, user_id: UserId = DEFAULT_USER,
                           account: Optional[int] = None) -> dict:

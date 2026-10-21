@@ -54,7 +54,7 @@ class ChatGPTProvider(BaseProvider):
         const turn = labels[labels.length - 1].closest('[data-turn-key]')
             || labels[labels.length - 1].parentElement;
         if (!turn) return '';
-        const md = turn.querySelector('.markdown, [data-message-author-role="assistant"] .markdown');
+        const md = turn.querySelector('[class*="MarkdownRoot"], .markdown');
         if (md) return md.innerText.trim();
         let txt = turn.innerText;
         const i = txt.lastIndexOf('ChatGPT said:');
@@ -81,7 +81,7 @@ class ChatGPTProvider(BaseProvider):
         const turn = labels[labels.length - 1].closest('[data-turn-key]')
             || labels[labels.length - 1].parentElement;
         if (!turn) return null;
-        return turn.querySelector('.markdown') || turn;
+        return turn.querySelector('[class*="MarkdownRoot"], .markdown') || turn;
     }"""
 
     async def _assistant_markdown(self) -> str:

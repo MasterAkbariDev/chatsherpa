@@ -12,6 +12,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple, Type
+from urllib.parse import urlparse
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
@@ -102,6 +103,12 @@ class BrowserPool:
         await self.start()
         key = (str(user_id), provider_cls.name)
         entry = self._entries.get(key)
+        # A user may have several named chats; the cached page must be on the
+        # one asked for, otherwise reopen it.
+        if entry is not None and start_url and provider_cls.is_conversation(start_url):
+            if urlparse(entry.page.url).path.rstrip("/") != urlparse(start_url).path.rstrip("/"):
+                await self.drop(str(user_id), provider_cls.name)
+                entry = None
         if entry is None:
             entry = await self._make_entry(provider_cls, session, start_url)
             self._entries[key] = entry

@@ -25,6 +25,7 @@ except Exception:  # pragma: no cover
     Fernet = None  # type: ignore
 
 DEFAULT_USER = "local"
+DEFAULT_CHAT = "default"
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]")
 
 
@@ -45,19 +46,25 @@ class SessionStore(ABC):
     @abstractmethod
     async def list(self) -> List[Tuple[str, str]]: ...
 
-    async def get_thread(self, user_id: Union[str, int], provider: str) -> Optional[str]:
-        """Last conversation URL for this user and provider, if one was saved."""
+    async def get_thread(self, user_id: Union[str, int], provider: str,
+                         chat: str = DEFAULT_CHAT) -> Optional[str]:
+        """Conversation URL saved under ``chat`` for this user and provider, if any."""
         return None
 
-    async def put_thread(self, user_id: Union[str, int], provider: str, url: str) -> None:
-        """Remember ``url`` so the next ask continues that chat."""
+    async def put_thread(self, user_id: Union[str, int], provider: str, url: str,
+                         chat: str = DEFAULT_CHAT) -> None:
+        """Remember ``url`` under ``chat`` so the next ask on that chat continues it."""
         return None
+
+    async def list_threads(self, user_id: Union[str, int], provider: str) -> Dict[str, str]:
+        """All saved chats for this user and provider, as ``{chat name: url}``."""
+        return {}
 
 
 class MemorySessionStore(SessionStore):
     def __init__(self) -> None:
         self._data: Dict[Tuple[str, str], Dict[str, Any]] = {}
-        self._threads: Dict[Tuple[str, str], str] = {}
+        self._threads: Dict[Tuple[str, str], Dict[str, str]] = {}
 
     async def get(self, user_id, provider):
         state = self._data.get((_slug(user_id), provider.lower()))
@@ -72,11 +79,14 @@ class MemorySessionStore(SessionStore):
     async def list(self):
         return [(u, p) for (u, p) in self._data]
 
-    async def get_thread(self, user_id, provider):
-        return self._threads.get((_slug(user_id), provider.lower()))
+    async def get_thread(self, user_id, provider, chat=DEFAULT_CHAT):
+        return self._threads.get((_slug(user_id), provider.lower()), {}).get(chat)
 
-    async def put_thread(self, user_id, provider, url):
-        self._threads[(_slug(user_id), provider.lower())] = url
+    async def put_thread(self, user_id, provider, url, chat=DEFAULT_CHAT):
+        self._threads.setdefault((_slug(user_id), provider.lower()), {})[chat] = url.strip()
+
+    async def list_threads(self, user_id, provider):
+        return dict(self._threads.get((_slug(user_id), provider.lower()), {}))
 
 
 class FileSessionStore(SessionStore):
@@ -134,19 +144,38 @@ class FileSessionStore(SessionStore):
         name = provider if _slug(user_id) == DEFAULT_USER else f"{provider}.{_slug(user_id)}"
         return self.dir / f"{name}.thread"
 
-    async def get_thread(self, user_id, provider):
-        p = self._thread_path(user_id, provider)
-        if not p.exists():
-            return None
-        url = p.read_text("utf-8").strip()
-        return url or None
+    # Named chats live in one ``.chats`` JSON map per (user, provider). The
+    # extension keeps it out of the ``*.json*`` session glob in list().
+    def _chats_path(self, user_id, provider) -> Path:
+        provider = provider.lower()
+        name = provider if _slug(user_id) == DEFAULT_USER else f"{provider}.{_slug(user_id)}"
+        return self.dir / f"{name}.chats"
 
-    async def put_thread(self, user_id, provider, url):
-        self._thread_path(user_id, provider).write_text(url.strip() + "\n", encoding="utf-8")
+    def _read_chats(self, user_id, provider) -> Dict[str, str]:
+        p = self._chats_path(user_id, provider)
+        if p.exists():
+            return json.loads(p.read_text("utf-8") or "{}")
+        legacy = self._thread_path(user_id, provider)  # single-chat files from before named chats
+        if legacy.exists():
+            url = legacy.read_text("utf-8").strip()
+            return {DEFAULT_CHAT: url} if url else {}
+        return {}
+
+    async def get_thread(self, user_id, provider, chat=DEFAULT_CHAT):
+        return self._read_chats(user_id, provider).get(chat) or None
+
+    async def put_thread(self, user_id, provider, url, chat=DEFAULT_CHAT):
+        chats = self._read_chats(user_id, provider)
+        chats[chat] = url.strip()
+        self._chats_path(user_id, provider).write_text(
+            json.dumps(chats, indent=2) + "\n", encoding="utf-8")
+
+    async def list_threads(self, user_id, provider):
+        return dict(self._read_chats(user_id, provider))
 
     async def delete(self, user_id, provider):
         for p in (self.path_for(user_id, provider), self._plain_path(user_id, provider),
-                  self._thread_path(user_id, provider)):
+                  self._thread_path(user_id, provider), self._chats_path(user_id, provider)):
             if p.exists():
                 p.unlink()
 

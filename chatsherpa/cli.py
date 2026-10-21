@@ -246,7 +246,8 @@ async def cmd_ask(args) -> int:
                                       model=getattr(args, "model", None), model_order=order,
                                       new_chat=getattr(args, "new", False),
                                       account=getattr(args, "account", None),
-                                      on_model=on_model)
+                                      on_model=on_model,
+                                      chat=getattr(args, "chat", None) or "default")
     except Exception as exc:
         ui.fail(str(exc))
         await bridge.aclose()
@@ -260,6 +261,24 @@ async def cmd_ask(args) -> int:
                         subtitle=subtitle, subtitle_align="right",
                         border_style=style, title_align="left"))
     await bridge.aclose()
+    return 0
+
+
+async def cmd_chats(args) -> int:
+    """List the named chats saved for one user and provider."""
+    from rich.table import Table
+    from rich import box
+    provider_cls = get_provider(args.provider)
+    user = getattr(args, "user", None) or "local"
+    chats = await _store().list_threads(user, provider_cls.name)
+    if not chats:
+        ui.warn(f"no saved chats for {user} on {provider_cls.name} yet — chatsherpa ask {provider_cls.name} \"hi\"")
+        return 0
+    t = Table(box=box.SIMPLE, show_edge=False)
+    t.add_column("chat"); t.add_column("url", style=ui.SOFT)
+    for name, url in sorted(chats.items()):
+        t.add_row(f"[{ui.pstyle(provider_cls.name)}]●[/] {name}", url)
+    console.print(t)
     return 0
 
 
@@ -380,7 +399,8 @@ async def cmd_sessions(args) -> int:
     store = _store()
     rows = await store.list()
     t = Table(title="Stored sessions", box=box.ROUNDED, title_style=f"bold {ui.TEAL}")
-    t.add_column("provider"); t.add_column("account"); t.add_column("age", style=ui.SOFT); t.add_column("enc", style=ui.SOFT)
+    t.add_column("provider"); t.add_column("account"); t.add_column("chats", style=ui.SOFT)
+    t.add_column("age", style=ui.SOFT); t.add_column("enc", style=ui.SOFT)
     if not rows:
         console.print(f"[{ui.SOFT}]no sessions yet — run[/] chatsherpa login <provider>")
         return 0
@@ -392,7 +412,8 @@ async def cmd_sessions(args) -> int:
             secs = now - p.stat().st_mtime
             age = f"{int(secs//3600)}h" if secs >= 3600 else f"{int(secs//60)}m"
         enc = "🔒" if p.suffix == ".enc" else "—"
-        t.add_row(f"[{ui.pstyle(prov)}]●[/] {prov}", user, age, enc)
+        chats = await store.list_threads(user, prov)
+        t.add_row(f"[{ui.pstyle(prov)}]●[/] {prov}", user, str(len(chats)) if chats else "—", age, enc)
     console.print(t)
     return 0
 
@@ -565,7 +586,9 @@ def build_parser() -> argparse.ArgumentParser:
     ak = sub.add_parser("ask"); ak.add_argument("provider", choices=provs); ak.add_argument("prompt")
     ak.add_argument("--headful", action="store_true"); ak.add_argument("--timeout", type=int, default=180)
     ak.add_argument("--user", default="local", help="account label to use (default: local)")
-    ak.add_argument("--new", action="store_true", help="start a new chat instead of continuing the last one")
+    ak.add_argument("--chat", default="default", metavar="NAME",
+                    help="named chat to continue for this user (default: 'default'); a new name starts a new chat")
+    ak.add_argument("--new", action="store_true", help="reset the named chat and start it over")
     ak.add_argument("--account", type=int, help="Gemini account slot: 0 is the main Google account, 1 the next")
     ak.add_argument("--model", help="preferred model (e.g. Expert, '3.1 Pro')")
     ak.add_argument("--model-order", help="comma-separated model preference order")
@@ -587,6 +610,10 @@ def build_parser() -> argparse.ArgumentParser:
     im.add_argument("--domain", help="domain for --cookie-header (default: provider home)")
     im.add_argument("--user", default="local", help="account label to store under (default: local)")
 
+    ch = sub.add_parser("chats", help="list a user's saved chats for a provider")
+    ch.add_argument("provider", choices=provs)
+    ch.add_argument("--user", default="local", help="account label (default: local)")
+
     rm = sub.add_parser("remove", help="delete a stored session (token) for a provider/account")
     rm.add_argument("provider", choices=provs)
     rm.add_argument("--user", default="local", help="account label to remove (default: local)")
@@ -598,7 +625,7 @@ SYNC = {"providers": cmd_providers, "doctor": cmd_doctor, "setup": cmd_setup,
         "serve": cmd_serve, "link": cmd_link}
 ASYNC = {"login": cmd_login, "ask": cmd_ask, "test": cmd_test,
          "sessions": cmd_sessions, "import": cmd_import, "grab": cmd_grab,
-         "models": cmd_models, "remove": cmd_remove}
+         "models": cmd_models, "remove": cmd_remove, "chats": cmd_chats}
 
 
 def main(argv=None) -> int:
