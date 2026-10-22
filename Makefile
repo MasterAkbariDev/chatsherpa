@@ -20,7 +20,7 @@ help:
 	@echo "make grab PROVIDER=gemini CDP=http://localhost:9222   grab from your Edge/Chrome"
 	@echo "make ask PROVIDER=chatgpt PROMPT='hello'              send a prompt"
 	@echo "make sessions              list stored sessions"
-	@echo "make serve                 run the login server locally on 127.0.0.1:8080"
+	@echo "make serve                 run the login server locally on 127.0.0.1:8091"
 	@echo "make deploy SERVER=root@95.182.94.71 SSH_PORT=2112 SSH_PROXY='nc -X 5 -x 127.0.0.1:10808 %h %p'"
 
 setup:

@@ -108,7 +108,8 @@ systemctl enable chatsherpa >/dev/null 2>&1 || true
 systemctl restart chatsherpa
 sleep 4
 echo "    service: $(systemctl is-active chatsherpa)"
-curl -fsS http://127.0.0.1:8080/healthz && echo || echo "    health check FAILED — see: journalctl -u chatsherpa -n 40"
+PORT="$(sed -n 's/^SERVER_PORT=//p' "$REMOTE_DIR/.env" 2>/dev/null | head -1)"; PORT="${PORT:-8091}"
+curl -fsS "http://127.0.0.1:$PORT/healthz" && echo || echo "    health check FAILED — see: journalctl -u chatsherpa -n 40"
 
 if [ "$DO_NGINX" = "1" ]; then
     echo "==> nginx /chatsherpa/ proxy"
@@ -120,7 +121,8 @@ if [ "$DO_NGINX" = "1" ]; then
         echo "    /chatsherpa/ already present; nothing to do."
     else
         cp -p "$NGINX_SITE" "$NGINX_SITE.bak-chatsherpa-$(date +%Y%m%d-%H%M%S)"
-        BLOCK=$'    location = /chatsherpa {\n        return 301 https://'"$NGINX_DOMAIN"$'/chatsherpa/;\n    }\n\n    location /chatsherpa/ {\n        proxy_pass http://127.0.0.1:8080/;\n        proxy_http_version 1.1;\n        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection "upgrade";\n        proxy_set_header Host $host;\n        proxy_read_timeout 3600s;\n        proxy_send_timeout 3600s;\n    }\n'
+        BLOCK=$'    location = /chatsherpa {\n        return 301 https://'"$NGINX_DOMAIN"$'/chatsherpa/;\n    }\n\n    location /chatsherpa/ {\n        proxy_pass http://127.0.0.1:__PORT__/;\n        proxy_http_version 1.1;\n        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection "upgrade";\n        proxy_set_header Host $host;\n        proxy_read_timeout 3600s;\n        proxy_send_timeout 3600s;\n    }\n'
+        BLOCK="${BLOCK//__PORT__/$PORT}"
         awk -v block="$BLOCK" 'NR==1{found=0} /location \/ \{/ && !found {print block; found=1} {print}' \
             "$NGINX_SITE" > "$NGINX_SITE.tmp" && mv "$NGINX_SITE.tmp" "$NGINX_SITE"
         if nginx -t 2>/tmp/nginx-t; then

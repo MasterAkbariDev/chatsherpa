@@ -50,7 +50,7 @@ class LoginServer:
         api_secret: Optional[str] = None,
         ttl: int = 600,
         host: str = "0.0.0.0",
-        port: int = 8080,
+        port: int = 8091,
         config: Optional[ProviderConfig] = None,
     ):
         self.store = store

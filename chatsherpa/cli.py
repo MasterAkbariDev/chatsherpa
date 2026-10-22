@@ -239,7 +239,7 @@ def _ask_via_server(args, chat: str, order) -> Optional[dict]:
     import urllib.error
     import urllib.request
     env = _env()
-    base = f"http://127.0.0.1:{env.get('SERVER_PORT', '8080')}"
+    base = f"http://127.0.0.1:{env.get('SERVER_PORT', '8091')}"
     headers = {"Content-Type": "application/json"}
     if env.get("API_SECRET"):
         headers["X-ChatSherpa-Secret"] = env["API_SECRET"]
@@ -551,7 +551,7 @@ def cmd_setup(args) -> int:
     base = Prompt.ask("Public base URL ([bold]https://[/] + domain)",
                       default=env.get("PUBLIC_BASE_URL") or "https://login.example.com")
     host = Prompt.ask("Bind host", default=env.get("SERVER_HOST") or "0.0.0.0")
-    port = Prompt.ask("Bind port", default=env.get("SERVER_PORT") or "8080")
+    port = Prompt.ask("Bind port", default=env.get("SERVER_PORT") or "8091")
     api_secret = Prompt.ask("API secret (bots send this to start logins)",
                             default=env.get("API_SECRET") or "")
     updates = {"PUBLIC_BASE_URL": base, "SERVER_HOST": host, "SERVER_PORT": port}
@@ -591,7 +591,7 @@ def cmd_serve(args) -> int:
     bus = EventBus()
     if env.get("WEBHOOK_URL"):
         bus.on(WebhookSink(env["WEBHOOK_URL"], secret=env.get("WEBHOOK_SECRET")))
-    host = env.get("SERVER_HOST", "0.0.0.0"); port = int(env.get("SERVER_PORT", "8080"))
+    host = env.get("SERVER_HOST", "0.0.0.0"); port = int(env.get("SERVER_PORT", "8091"))
     server = LoginServer(store=_store(), public_base_url=base, bus=bus,
                          headless=True, api_secret=env.get("API_SECRET"),
                          host=host, port=port)

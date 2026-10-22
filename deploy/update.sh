@@ -70,7 +70,7 @@ chown -R chatsherpa:chatsherpa "$INSTALL_DIR" 2>/dev/null || true
 
 # ---- restart ----------------------------------------------------------------
 step "Service"
-PORT="$(sed -n 's/^SERVER_PORT=//p' .env 2>/dev/null | head -1)"; PORT="${PORT:-8080}"
+PORT="$(sed -n 's/^SERVER_PORT=//p' .env 2>/dev/null | head -1)"; PORT="${PORT:-8091}"
 run "restart service" "systemctl restart chatsherpa && sleep 3" || warn "service may not be up"
 if curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then ok "service healthy on 127.0.0.1:$PORT"
 else warn "health check failed — see: journalctl -u chatsherpa -n 40"; fi

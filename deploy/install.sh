@@ -3,7 +3,7 @@
 #
 #   bash install.sh                      # interactive (asks domain, name, nginx)
 #   PUBLIC_BASE_URL=https://example.com/chatsherpa bash install.sh
-#   curl -fsSL .../install.sh | bash     # blank domain → http://<this-ip>:8080
+#   curl -fsSL .../install.sh | bash     # blank domain → http://<this-ip>:<free port from 8091>
 #
 # Env (all optional; you are asked for anything missing):
 #   PUBLIC_BASE_URL  full public URL incl. the name path, e.g. https://example.com/chatsherpa
@@ -11,13 +11,19 @@
 #   NGINX_DOMAIN     the public domain (when PUBLIC_BASE_URL is not given).
 #                    Leave empty to serve directly on this server's IP (no nginx).
 #   NGINX_SITE       nginx site file to edit (skips the interactive picker)
-#   INSTALL_DIR      default /opt/chatsherpa   SERVER_PORT  default 8080
+#   INSTALL_DIR      default /opt/chatsherpa   SERVER_PORT  default: the port already in .env,
+#                    else the first free port from 8091 (8080 is often taken by nginx)
 #   REPO_URL         the git repo              WITH_CHROMIUM=1  install Chromium
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/MasterAkbariDev/chatsherpa.git}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/chatsherpa}"
-SERVER_PORT="${SERVER_PORT:-8080}"
+# Port: keep the one already in .env (reinstall/update), else the first free one
+# from 8091 up. 8080 is left out on purpose: nginx and other panels often own it.
+port_in_use() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+pick_port() { local p="$1"; while port_in_use "$p"; do p=$((p + 1)); done; echo "$p"; }
+EXISTING_PORT="$(sed -n 's/^SERVER_PORT=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1 || true)"
+SERVER_PORT="${SERVER_PORT:-${EXISTING_PORT:-$(pick_port 8091)}}"
 BASE="${PUBLIC_BASE_URL:-}"
 MOUNT="${MOUNT:-}"
 DOMAIN="${NGINX_DOMAIN:-}"

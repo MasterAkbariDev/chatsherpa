@@ -772,7 +772,7 @@ also run without a domain, serving on the server's IP.
 | `NGINX_DOMAIN` | public domain, when `PUBLIC_BASE_URL` is not set. Leave empty to serve on the IP. |
 | `NGINX_SITE` | nginx site file to edit (skips the picker) |
 | `INSTALL_DIR` | install location (default `/opt/chatsherpa`) |
-| `SERVER_PORT` | port (default `8080`) |
+| `SERVER_PORT` | port (install picks the first free one from `8091`; 8080 is often taken by nginx) |
 | `REPO_URL` | git repository to install from |
 | `WITH_CHROMIUM=1` | also install Chromium (needed for live view and server-side ask) |
 

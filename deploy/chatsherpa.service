@@ -3,6 +3,9 @@ Description=ChatSherpa live-view and connect login server
 After=network-online.target
 Wants=network-online.target
 
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
 [Service]
 Type=simple
 User=chatsherpa
@@ -11,7 +14,7 @@ WorkingDirectory=/opt/chatsherpa
 Environment=HOME=/opt/chatsherpa
 ExecStart=/opt/chatsherpa/.venv/bin/chatsherpa serve
 Restart=on-failure
-RestartSec=5
+RestartSec=30
 MemoryMax=350M
 NoNewPrivileges=true
 ProtectSystem=strict
