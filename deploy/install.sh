@@ -156,12 +156,19 @@ if [ "${WITH_CHROMIUM:-0}" = "1" ]; then
     cdone=""
     for m in https://playwright.azureedge.net https://playwright-akamai.azureedge.net \
              https://cdn.npmmirror.com/binaries/playwright https://npmmirror.com/mirrors/playwright; do
-        if run "download Chromium — $m" "PLAYWRIGHT_DOWNLOAD_HOST='$m' timeout 360 .venv/bin/python -m playwright install chromium"; then cdone=1; break; fi
+        if run "download Chromium — $m" "PLAYWRIGHT_BROWSERS_PATH='$INSTALL_DIR/.cache/ms-playwright' PLAYWRIGHT_DOWNLOAD_HOST='$m' timeout 360 .venv/bin/python -m playwright install chromium"; then cdone=1; break; fi
     done
     [ -n "$cdone" ] && MEM=900M || warn "all Chromium mirrors failed (connect mode still works)"
 fi
 
 # ---- config -----------------------------------------------------------------
+# One browser copy, in the service's cache. Root's commands (chatsherpa ask/doctor) link to it.
+mkdir -p "$INSTALL_DIR/.cache" /root/.cache
+if [ -d "$INSTALL_DIR/.cache/ms-playwright" ] && [ ! -e /root/.cache/ms-playwright ]; then
+    ln -s "$INSTALL_DIR/.cache/ms-playwright" /root/.cache/ms-playwright
+fi
+chown -R chatsherpa:chatsherpa "$INSTALL_DIR/.cache" 2>/dev/null || true
+
 step "Configuration file (.env)"
 if [ ! -f .env ]; then
     SECRET="$(openssl rand -hex 32)"
