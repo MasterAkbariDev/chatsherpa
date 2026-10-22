@@ -11,19 +11,18 @@
 #   NGINX_DOMAIN     the public domain (when PUBLIC_BASE_URL is not given).
 #                    Leave empty to serve directly on this server's IP (no nginx).
 #   NGINX_SITE       nginx site file to edit (skips the interactive picker)
-#   INSTALL_DIR      default /opt/chatsherpa   SERVER_PORT  default: the port already in .env,
-#                    else the first free port from 8091 (8080 is often taken by nginx)
+#   INSTALL_DIR      default /opt/chatsherpa   SERVER_PORT  asked for (default: .env, else 8091);
+#                    a busy port is refused. 8080 is often taken by nginx.
 #   REPO_URL         the git repo              WITH_CHROMIUM=1  install Chromium
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/MasterAkbariDev/chatsherpa.git}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/chatsherpa}"
-# Port: keep the one already in .env (reinstall/update), else the first free one
-# from 8091 up. 8080 is left out on purpose: nginx and other panels often own it.
+# Port: never picked silently. Given via SERVER_PORT, or asked for (default: the one in
+# .env, else 8091). A busy port is refused and asked again.
 port_in_use() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
-pick_port() { local p="$1"; while port_in_use "$p"; do p=$((p + 1)); done; echo "$p"; }
 EXISTING_PORT="$(sed -n 's/^SERVER_PORT=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1 || true)"
-SERVER_PORT="${SERVER_PORT:-${EXISTING_PORT:-$(pick_port 8091)}}"
+SERVER_PORT="${SERVER_PORT:-}"
 BASE="${PUBLIC_BASE_URL:-}"
 MOUNT="${MOUNT:-}"
 DOMAIN="${NGINX_DOMAIN:-}"
@@ -45,6 +44,25 @@ ok()   { printf "  ${GRN}✓${RST} %s\n" "$1"; }
 warn() { printf "  ${YLW}!${RST} %s\n" "$1"; }
 die()  { printf "  ${RED}✗ %s${RST}\n" "$1"; exit 1; }
 ask()  { local p="$1" d="$2" a=""; [ -n "$TTY" ] && read -rp "$p" a <"$TTY" || true; printf '%s' "${a:-$d}"; }
+
+# ---- port -------------------------------------------------------------------
+if [ -z "$SERVER_PORT" ]; then
+    if [ -z "$TTY" ]; then
+        [ -n "$EXISTING_PORT" ] && SERVER_PORT="$EXISTING_PORT" \
+            || { printf "  ✗ no port: set SERVER_PORT=<free port> (e.g. 8091) or run in a terminal\n" >&2; exit 1; }
+    else
+        while :; do
+            SERVER_PORT="$(ask "  Port for the login server [${EXISTING_PORT:-8091}]: " "${EXISTING_PORT:-8091}")"
+            if ! printf '%s' "$SERVER_PORT" | grep -qE '^[0-9]+$' || [ "$SERVER_PORT" -lt 1024 ] || [ "$SERVER_PORT" -gt 65535 ]; then
+                printf "  ✗ %s is not a usable port (1024-65535)\n" "$SERVER_PORT" >&2; continue
+            fi
+            if port_in_use "$SERVER_PORT"; then
+                printf "  ✗ port %s is already in use on this server; pick another\n" "$SERVER_PORT" >&2; continue
+            fi
+            break
+        done
+    fi
+fi
 
 run() { # run "message" "shell command"  — spinner + ok/fail, logs on failure
     local msg="$1" cmd="$2" log rc; log="$(mktemp)"
@@ -169,7 +187,13 @@ sed "s#MemoryMax=.*#MemoryMax=$MEM#" deploy/chatsherpa.service > /etc/systemd/sy
 chown -R chatsherpa:chatsherpa "$INSTALL_DIR"
 systemctl daemon-reload
 run "start service" "systemctl enable --now chatsherpa && sleep 4" || warn "service may not be up"
-if curl -fsS "http://127.0.0.1:$SERVER_PORT/healthz" >/dev/null 2>&1; then ok "service healthy on 127.0.0.1:$SERVER_PORT"
+# The service needs a few seconds to bind; retry instead of failing on the first try.
+healthy=0
+for _ in $(seq 1 30); do
+    curl -fsS "http://127.0.0.1:$SERVER_PORT/healthz" >/dev/null 2>&1 && { healthy=1; break; }
+    sleep 1
+done
+if [ "$healthy" = 1 ]; then ok "service healthy on 127.0.0.1:$SERVER_PORT"
 else warn "health check failed — see: journalctl -u chatsherpa -n 40"; fi
 
 # ---- nginx ------------------------------------------------------------------
@@ -196,12 +220,36 @@ EOF
 
 apply_existing() { # $1 = file
     local f="$1"
-    grep -q "location /$MOUNT/" "$f" && { NGINX_ON=1; ok "already present in $(basename "$f")"; return; }
+    if grep -q "location /$MOUNT/" "$f"; then
+        # Already routed: make sure it points at the port this install runs on.
+        perl -0777 -i -pe "s#(location /$MOUNT/ \{\s*proxy_pass http://127\.0\.0\.1:)[0-9]+#\${1}$SERVER_PORT#" "$f"
+        nginx -t >/dev/null 2>&1 && systemctl reload nginx
+        NGINX_ON=1; ok "already routed in $(basename "$f") (port $SERVER_PORT)"; return
+    fi
     cp -p "$f" "$f.bak-chatsherpa-$(date +%Y%m%d-%H%M%S)"
     BLOCK="$(proxy_block)" perl -0777 -i -pe 's/^([ \t]*location \/ \{)/$ENV{BLOCK}\n\n$1/m' "$f"
     grep -q "location /$MOUNT/" "$f" || { mv "$f".bak-chatsherpa-* "$f"; warn "no 'location /' in $(basename "$f") — add deploy/nginx-snippet.conf manually"; return; }
     if nginx -t >/dev/null 2>&1; then systemctl reload nginx; NGINX_ON=1; ok "added to $(basename "$f") and reloaded"
+        cert_step "$f"
     else mv "$f".bak-chatsherpa-* "$f"; warn "nginx test failed — rolled back"; fi
+}
+
+cert_step() { # $1 = nginx file serving $DOMAIN over HTTP
+    local live="/etc/letsencrypt/live/$DOMAIN"
+    if [ -f "$live/fullchain.pem" ]; then ok "certificate found: $live"; return; fi
+    if [ -z "$TTY" ]; then warn "no certificate for $DOMAIN — HTTPS needs one: certbot --nginx -d $DOMAIN"; return; fi
+    local ans email
+    ans="$(ask "  No certificate for ${B}$DOMAIN${RST}. Get a free Let's Encrypt one now? [y/N]: " n)"
+    case "$ans" in y|Y|yes) ;; *) warn "HTTP only. Later: certbot --nginx -d $DOMAIN"; return ;; esac
+    email="$(ask "  Email for Let's Encrypt notices: " "")"
+    [ -n "$email" ] || { warn "certbot needs an email; skipped"; return; }
+    command -v certbot >/dev/null 2>&1 || apt-get install -y -qq certbot python3-certbot-nginx >/dev/null 2>&1 \
+        || { warn "could not install certbot; install it, then: certbot --nginx -d $DOMAIN"; return; }
+    if certbot --nginx -d "$DOMAIN" -m "$email" --agree-tos -n --redirect >/dev/null 2>&1; then
+        nginx -t >/dev/null 2>&1 && systemctl reload nginx; ok "certificate installed for $DOMAIN"
+    else
+        warn "certbot failed: $DOMAIN must resolve to this server and port 80 must be open. Retry: certbot --nginx -d $DOMAIN"
+    fi
 }
 
 create_new() { # $1 = file
@@ -209,17 +257,27 @@ create_new() { # $1 = file
     { printf 'server {\n    listen 80;\n    server_name %s;\n\n' "$DOMAIN"; proxy_block; printf '}\n'; } > "$f"
     [ -d /etc/nginx/sites-enabled ] && ln -sf "$f" "/etc/nginx/sites-enabled/$(basename "$f")"
     if nginx -t >/dev/null 2>&1; then systemctl reload nginx; NGINX_ON=1; ok "created $(basename "$f") (HTTP) and reloaded"
-        warn "this new site is HTTP only — add TLS for the login links (e.g. certbot --nginx -d $DOMAIN)"
+        cert_step "$f"
     else rm -f "$f" "/etc/nginx/sites-enabled/$(basename "$f")"; warn "nginx test failed — new site removed"; fi
 }
 
 step "nginx reverse proxy"
+DOMAIN_FILE=""
+if [ -n "$DOMAIN" ] && [ -d "$NGINX_DIR" ]; then
+    DOMAIN_FILE="$(grep -ls "server_name[^;]*\b$DOMAIN\b" "$NGINX_DIR"/* /etc/nginx/sites-enabled/* 2>/dev/null \
+        | grep -v '\.bak' | while read -r x; do grep -q "location /" "$x" && { echo "$x"; break; }; done || true)"
+fi
 if [ -n "$VIA_IP" ]; then
     ok "skipped — open port ${B}$SERVER_PORT${RST} if a firewall is on"
 elif [ -z "$MOUNT" ]; then
     warn "root URL (no path) — configure nginx manually"
 elif ! command -v nginx >/dev/null 2>&1; then
     warn "nginx not installed — skipping (proxy 127.0.0.1:$SERVER_PORT when you set it up)"
+elif [ -z "${NGINX_SITE:-}" ] && [ -n "$DOMAIN_FILE" ]; then
+    # Add the routes to the server block that already serves this domain. A second
+    # block for the same name would shadow it (that caused a 404 on the live VPS).
+    ok "found the existing $DOMAIN block in $(basename "$DOMAIN_FILE")"
+    apply_existing "$DOMAIN_FILE"
 elif [ -n "${NGINX_SITE:-}" ]; then
     [ -f "$NGINX_SITE" ] && apply_existing "$NGINX_SITE" || create_new "$NGINX_SITE"
 elif [ -z "$TTY" ]; then
