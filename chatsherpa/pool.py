@@ -54,10 +54,13 @@ class _Lease:
 
 
 class BrowserPool:
-    def __init__(self, headless: bool = True, max_contexts: int = 24,
-                 max_concurrency: int = 6, config: Optional[ProviderConfig] = None):
+    def __init__(self, headless: bool = True, max_contexts: int = 2,
+                 max_concurrency: int = 6, config: Optional[ProviderConfig] = None,
+                 idle_seconds: float = 300.0):
         self.headless = headless
         self.max_contexts = max_contexts
+        # A warm page keeps its renderer busy; on a small host, idle ones starve the CPU.
+        self.idle_seconds = idle_seconds
         self.config = config or ProviderConfig(headless=headless)
         self.config.headless = headless
         self._pw: Optional[Playwright] = None
@@ -125,6 +128,7 @@ class BrowserPool:
             entry = await self._make_entry(provider_cls, session, start_url)
             self._entries[key] = entry
             await self._evict_if_needed()
+        await self._drop_idle(keep=key)
         return _Lease(self, key, entry, provider_cls)
 
     async def _make_entry(self, provider_cls: Type[BaseProvider], session: Session,
@@ -157,6 +161,16 @@ class BrowserPool:
                             timeout=self.config.nav_timeout_ms)
         await provider_cls.attach(page, self.config)._after_load()
         return _Entry(context, page)
+
+    async def _drop_idle(self, keep=None) -> None:
+        """Close contexts nobody has used for ``idle_seconds`` (never the one in use)."""
+        now = time.monotonic()
+        for key, entry in list(self._entries.items()):
+            if key == keep or entry.lock.locked():
+                continue
+            if now - entry.last_used > self.idle_seconds:
+                log.info("closing idle context %s", key)
+                await self.drop(key[0], key[1])
 
     async def _evict_if_needed(self) -> None:
         while len(self._entries) > self.max_contexts:
