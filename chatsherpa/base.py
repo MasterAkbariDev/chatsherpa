@@ -44,6 +44,12 @@ _IMAGE_PENDING = re.compile(
     re.I,
 )
 
+# A prompt that asks for a picture. Its reply is not finished until the picture is there, even when the text is done.
+_PICTURE_REQUEST = re.compile(
+    r"\b(images?|pictures?|photos?|drawings?|illustrations?|logos?|draw|paint|sketch)\b|عکس|تصویر|نقاشی",
+    re.I,
+)
+
 _SKIP_MODEL = re.compile(
     r"^(premium|supergrok|upgrade\b.*|get\s.*|see\s.*|learn\s.*|try\s.*|subscribe.*|buy\s.*"
     r"|sign\s?(in|up).*|log\s?(in|out).*|settings|help|new chat|temporary chat|plans?|pricing"
@@ -580,7 +586,7 @@ class BaseProvider:
                 pending = _IMAGE_PENDING.match(text or "")
         result = (await self._assistant_markdown()) or text
         self._raise_if_busy(result)
-        self.last_media = await self._capture_media()
+        self.last_media = await self._capture_media(expect_picture=bool(_PICTURE_REQUEST.search(prompt or "")))
         log.info("[%s] received %d chars", self.name, len(result))
         return result
 
@@ -827,12 +833,14 @@ class BaseProvider:
     MEDIA_WAIT_S = 30.0
     #: Longest wait for a reply that only says it is making a picture (for example "Generating image…").
     IMAGE_WAIT_S = 300.0
+    #: How long a requested picture may take to appear after the reply's text is done.
+    IMAGE_APPEAR_WAIT_S = 120.0
     #: Longest wait for a reply that only says it is making a video.
     VIDEO_WAIT_S = 600.0
     #: Where the provider keeps its pictures, when they are outside the text block (None: the text block).
     media_selector: Optional[str] = None
 
-    async def _capture_media(self) -> list:
+    async def _capture_media(self, expect_picture: bool = False) -> list:
         """Images in the latest reply, fetched through the signed-in page. Never raises.
 
         A picture that is still loading is waited for (providers finish the text first and the image
@@ -843,7 +851,10 @@ class BaseProvider:
             if not await loc.count():
                 return []
             handle = await loc.element_handle()
-            deadline = time.monotonic() + self.MEDIA_WAIT_S
+            # A picture that was asked for can appear well after the text (the image is made after the words), so
+            # the wait is longer and does not stop when no picture has started loading yet.
+            wait_s = self.IMAGE_APPEAR_WAIT_S if expect_picture else self.MEDIA_WAIT_S
+            deadline = time.monotonic() + wait_s
             while True:
                 found = await self.page.evaluate(
                     self._MEDIA_JS,
@@ -854,7 +865,7 @@ class BaseProvider:
                 loading = await handle.evaluate(
                     "el => [...el.querySelectorAll('img')].filter(i => i.src && !i.complete).length"
                 )
-                if not loading:
+                if not loading and not expect_picture:
                     return []
                 await asyncio.sleep(1.0)
         except Exception as exc:  # noqa: BLE001 - a reply without pictures must still return
