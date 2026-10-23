@@ -110,3 +110,30 @@ async def test_a_not_connected_answer_is_not_rechecked():
     server._browser_check = read_once
     assert await server._run_login_check("u:grok", "grok", "u") is False
     assert reads == ["grok"]
+
+
+async def test_a_saved_sign_in_replaces_a_cached_not_connected_answer():
+    server = LoginServer(store=MemorySessionStore(), public_base_url="https://login.example.com")
+    server._login_checks["u:gemini"] = (time.monotonic(), False)
+    await server._saved_login("u", "gemini", {"cookies": [], "origins": []})
+    assert server._login_checks["u:gemini"][1] is True
+
+
+async def test_a_page_that_was_not_read_is_not_a_not_signed_in_answer():
+    class _Prov:
+        challenge_markers = ("Error 403 (Forbidden)",)
+
+        def __init__(self, url, text):
+            self.page = type("P", (), {"url": url})()
+            self._text = text
+
+        async def _page_text(self):
+            return self._text
+
+    server_cls = LoginServer
+    assert await server_cls._page_not_read(_Prov("about:blank", "")) is True
+    assert await server_cls._page_not_read(_Prov("chrome-error://chromewebdata/", "")) is True
+    assert await server_cls._page_not_read(_Prov("https://gemini.google.com/app", "Error 403 (Forbidden)")) is True
+    assert await server_cls._page_not_read(_Prov("https://gemini.google.com/app", "Hello")) is False
+    # A sign-in page is a real answer: the page was read, and it says signed out.
+    assert await server_cls._page_not_read(_Prov("https://accounts.google.com/signin", "Sign in")) is False

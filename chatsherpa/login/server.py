@@ -160,7 +160,7 @@ class LoginServer:
                 signed_in = await self._probe(prov)
             if signed_in:
                 state = await pending.context.storage_state()
-                await self.store.put(pending.user_id, provider_cls.name, state)
+                await self._saved_login(pending.user_id, provider_cls.name, state)
                 self.broker.resolve(pending.token, state)
                 await self.bus.emit(Event(EventType.LOGIN_SUCCEEDED, provider=provider_cls.name,
                                           user_id=pending.user_id))
@@ -204,7 +204,7 @@ class LoginServer:
                 try:
                     if await prov.is_logged_in():
                         state = await pending.context.storage_state()
-                        await self.store.put(pending.user_id, provider_cls.name, state)
+                        await self._saved_login(pending.user_id, provider_cls.name, state)
                         self.broker.resolve(pending.token, state)
                         await self.bus.emit(Event(EventType.LOGIN_SUCCEEDED,
                                                   provider=provider_cls.name, user_id=pending.user_id))
@@ -462,7 +462,32 @@ class LoginServer:
         lease = await self.bridge.pool.lease(provider_cls, session, user_id, start_url=provider_cls.home_url)
         async with lease as prov:
             # A check that takes longer than this says not connected, so the page does not wait.
-            return bool(await asyncio.wait_for(prov.is_logged_in(), self.LOGIN_CHECK_TIMEOUT_S))
+            signed_in = bool(await asyncio.wait_for(prov.is_logged_in(), self.LOGIN_CHECK_TIMEOUT_S))
+            # "Not signed in" is only an answer when the provider's page was read. A blocked or empty page is not one.
+            if not signed_in and await self._page_not_read(prov):
+                raise RuntimeError(f"{provider} page could not be read")
+            return signed_in
+
+    @staticmethod
+    async def _page_not_read(prov) -> bool:
+        """True when the page is empty, an error page, or a bot or IP block: no sign-in state can be read from it."""
+        page = getattr(prov, "page", None)
+        if page is None:
+            return False
+        url = page.url or ""
+        if not url or url.startswith(("about:", "chrome-error:")):
+            return True
+        try:
+            text = await prov._page_text()
+        except Exception:  # noqa: BLE001 - a page that cannot be read is not read
+            return True
+        return any(marker in text for marker in prov.challenge_markers)
+
+    async def _saved_login(self, user_id: str, provider: str, state: dict) -> None:
+        """Stores a sign-in that has just been proven. A "not connected" answer cached before it is dropped, so the
+        accounts page shows the new sign-in at once instead of after the cache runs out."""
+        await self.store.put(user_id, provider, state)
+        self._login_checks[f"{user_id}:{provider}"] = (time.monotonic(), True)
 
     async def _run_login_check(self, key: str, provider: str, user_id: str) -> Optional[bool]:
         lock = self._check_locks.setdefault(key, asyncio.Lock())
@@ -558,7 +583,7 @@ class LoginServer:
                 state["origins"] = body["origins"]
         if not state or not state.get("cookies"):
             return web.json_response({"error": "no session data"}, status=400)
-        await self.store.put(pending.user_id, pending.provider_cls.name, state)
+        await self._saved_login(pending.user_id, pending.provider_cls.name, state)
         home = body.get("home")
         if isinstance(home, str) and pending.provider_cls.entry_url(home):
             await self.store.put_thread(pending.user_id, pending.provider_cls.name, home)
