@@ -16,7 +16,7 @@
   header .t small{display:block;color:var(--soft);font-weight:400;font-size:11.5px}
   header .status{margin-left:auto;font-family:ui-monospace,monospace;font-size:11px;color:var(--soft)}
   .stage{flex:1;position:relative;display:grid;place-items:center;overflow:hidden;background:#0a0c10}
-  canvas{max-width:100%;max-height:100%;background:#fff;box-shadow:0 10px 40px rgba(0,0,0,.5);cursor:default;touch-action:none}
+  canvas{max-width:100%;max-height:100%;background:#fff;box-shadow:0 10px 40px rgba(0,0,0,.5);cursor:default;touch-action:pinch-zoom}
   .hint{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);font-size:11.5px;color:var(--soft);background:rgba(0,0,0,.5);padding:5px 12px;border-radius:999px;pointer-events:none}
   .overlay{position:absolute;inset:0;display:none;place-items:center;background:rgba(10,12,16,.92);backdrop-filter:blur(3px)}
   .overlay.show{display:grid}
@@ -37,7 +37,14 @@
   .bar button:hover{background:#343b48}
   .bar button:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
   .bar .sep{flex:none;width:1px;background:var(--line);margin:4px 2px}
-  #kb{position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;border:0;padding:0;margin:0;font-size:16px;pointer-events:none}
+  /* The typing bar: a visible field at the bottom, so the keyboard opens from a tap on it and typing never jumps the page. */
+  .typebar{flex:none;display:flex;align-items:center;gap:10px;padding:8px 10px calc(8px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line);background:var(--panel)}
+  .typebar .field{position:relative;flex:1;min-width:0}
+  #kb{width:100%;height:44px;box-sizing:border-box;border:1px solid var(--line-strong);border-radius:999px;padding:0 16px;background:#0f1218;color:var(--ink);font:inherit;font-size:16px;outline:none}
+  #kb:focus{border-color:var(--teal)}
+  .typebar .ph{position:absolute;left:16px;top:50%;transform:translateY(-50%);color:var(--soft);font-size:14px;pointer-events:none}
+  .typebar .state{flex:none;max-width:44%;font-size:11.5px;color:var(--soft);text-align:right;line-height:1.3}
+  .typebar.is-ready .state{color:var(--good)}
 </style>
 </head>
 <body>
@@ -74,11 +81,17 @@
   <div class="stage" id="stage">
     <canvas id="screen" width="1280" height="800"></canvas>
     <div class="hint">One-time, encrypted session. Log in as you normally would — Google / 2FA all work.</div>
-    <input id="kb" type="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="send" aria-label="Type here to send keys to the browser">
     <div class="overlay show" id="overlay">
       <div class="card"><div class="spin"></div><p id="ovtext">Starting secure browser…</p></div>
     </div>
   </div>
+<div class="typebar" id="typebar">
+  <div class="field">
+    <input id="kb" type="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="send" aria-label="Type to the page">
+    <span class="ph" id="kbph">Tap here to type on the page</span>
+  </div>
+  <span class="state" id="kbstate">Tap a text box on the page first</span>
+</div>
 <script>
 (function(){
   var WSURL="__WSURL__", canvas=document.getElementById("screen"), ctx=canvas.getContext("2d"),
@@ -95,6 +108,7 @@
     ws.onmessage=function(e){
       var m=JSON.parse(e.data);
       if(m.type==="frame"){ img.src="data:image/jpeg;base64,"+m.data; }
+      else if(m.type==="focus"){ setEditable(!!m.editable); }
       else if(m.type==="success"){ finish(true); }
       else if(m.type==="failed"||m.type==="error"){ finish(false,m.message); }
     };
@@ -124,16 +138,25 @@
     if(!moveTimer){ moveTimer=setTimeout(function(){ moveTimer=null; if(movePending){ var q=movePending; movePending=null; lastMove=Date.now(); send({t:"move",x:q.x,y:q.y}); } }, MOVE_MS-(now-lastMove)); }
   }
   canvas.addEventListener("mousemove",function(e){ sendMove(norm(e)); });
-  canvas.addEventListener("mousedown",function(e){e.preventDefault();var p=norm(e);send({t:"down",x:p.x,y:p.y,button:btn[e.button]||"left"});canvas.focus();openKeyboard();});
+  canvas.addEventListener("mousedown",function(e){e.preventDefault();var p=norm(e);send({t:"down",x:p.x,y:p.y,button:btn[e.button]||"left"});canvas.focus();});
   canvas.addEventListener("mouseup",function(e){var p=norm(e);send({t:"up",x:p.x,y:p.y,button:btn[e.button]||"left"});});
   canvas.addEventListener("contextmenu",function(e){e.preventDefault();});
   canvas.addEventListener("wheel",function(e){e.preventDefault();var p=norm(e);send({t:"wheel",x:p.x,y:p.y,dx:e.deltaX,dy:e.deltaY});},{passive:false});
   canvas.tabIndex=0;
 
   // Touch: one finger is the mouse. A tap clicks and opens the keyboard; a drag moves or scrolls the page.
-  canvas.addEventListener("touchstart",function(e){e.preventDefault();var p=norm(e.touches[0]);send({t:"move",x:p.x,y:p.y});send({t:"down",x:p.x,y:p.y,button:"left"});},{passive:false});
-  canvas.addEventListener("touchmove",function(e){e.preventDefault();sendMove(norm(e.touches[0]));},{passive:false});
-  canvas.addEventListener("touchend",function(e){e.preventDefault();var p=norm(e.changedTouches[0]);send({t:"up",x:p.x,y:p.y,button:"left"});openKeyboard();},{passive:false});
+  var oneFinger=false;
+  canvas.addEventListener("touchstart",function(e){
+    if(e.touches.length>1){ oneFinger=false; return; }   // two fingers: the browser zooms
+    e.preventDefault(); oneFinger=true;
+    var p=norm(e.touches[0]); send({t:"move",x:p.x,y:p.y}); send({t:"down",x:p.x,y:p.y,button:"left"});
+  },{passive:false});
+  canvas.addEventListener("touchmove",function(e){ if(e.touches.length>1||!oneFinger) return; e.preventDefault(); sendMove(norm(e.touches[0])); },{passive:false});
+  canvas.addEventListener("touchend",function(e){
+    if(!oneFinger || e.touches.length>0) return;
+    e.preventDefault(); oneFinger=false;
+    var p=norm(e.changedTouches[0]); send({t:"up",x:p.x,y:p.y,button:"left"});
+  },{passive:false});
 
   // Keys with their modifiers, so Ctrl+A, Shift+arrows and friends reach the page as the person pressed them.
   function withMods(o,e){ o.ctrl=!!(e.ctrlKey); o.meta=!!(e.metaKey); o.alt=!!(e.altKey); o.shift=!!(e.shiftKey); return o; }
@@ -144,7 +167,12 @@
   // and each change sends only the difference. The field holds one space as a sentinel, so Backspace
   // always changes it.
   var kb=document.getElementById("kb"), SENT=" ", mirror="";
-  function resetKb(){ kb.value=SENT; mirror=""; try{kb.setSelectionRange(1,1);}catch(_){} }
+  function resetKb(){ kb.value=SENT; mirror=""; try{kb.setSelectionRange(1,1);}catch(_){} syncPh(); }
+  function syncPh(){ document.getElementById("kbph").style.display = mirror==="" ? "block" : "none"; }
+  function setEditable(on){
+    document.getElementById("typebar").classList.toggle("is-ready", on);
+    document.getElementById("kbstate").textContent = on ? "Ready: type to the page" : "Tap a text box on the page first";
+  }
   function openKeyboard(){ resetKb(); kb.focus({preventScroll:true}); }
   function sync(){
     // Compare with what the field showed last time, sentinel included: deleting the sentinel is a Backspace too.
@@ -155,6 +183,7 @@
     var text=now.charAt(0)===SENT ? now.slice(1) : now;
     if(now.charAt(0)!==SENT){ kb.value=SENT+text; try{kb.setSelectionRange(1,1);}catch(_){} }
     mirror=text;
+    syncPh();
     if(text.length>200){ resetKb(); }
   }
   kb.addEventListener("input",function(){ sync(); });
@@ -178,12 +207,10 @@
       if(b.dataset.key==="v" && b.dataset.ctrl && navigator.clipboard && navigator.clipboard.readText){
         // The toolbar's Paste reads this device's clipboard; the remote clipboard is only a fallback.
         navigator.clipboard.readText().then(pasteText, function(){ send({t:"key",key:"v",ctrl:true}); });
-        kb.focus({preventScroll:true});
         return;
       }
       send({t:"key",key:b.dataset.key,ctrl:!!b.dataset.ctrl,shift:false,alt:false,meta:false});
       resetKb();
-      kb.focus({preventScroll:true});
     });
   });
   document.getElementById("kbtn").addEventListener("click",openKeyboard);
