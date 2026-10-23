@@ -4,15 +4,11 @@ from chatsherpa.login.remote import LiveStreamer
 
 
 class _FakeCDP:
-    def __init__(self, editable=False):
+    def __init__(self):
         self.calls = []
-        self.editable = editable
 
     async def send(self, method, params=None):
         self.calls.append((method, params or {}))
-        if method == "Runtime.evaluate":
-            return {"result": {"type": "boolean", "value": self.editable}}
-        return {}
 
 
 def _streamer():
@@ -95,26 +91,3 @@ async def test_mouse_moves_are_coalesced_so_a_click_is_not_queued_behind_them():
     presses = [p for m, p in s._cdp.calls if m == "Input.dispatchMouseEvent" and p["type"] == "mousePressed"]
     assert len(moves) < 50          # the backlog collapses to the newest position
     assert presses and methods.index("Input.dispatchMouseEvent") >= 0
-
-
-async def test_a_click_reports_whether_a_text_box_is_focused():
-    import asyncio
-    sent = []
-
-    async def collect(msg):
-        sent.append(msg)
-
-    s = _streamer()
-    s._cdp = _FakeCDP(editable=True)
-    s._send = collect
-    await s.dispatch({"t": "down", "x": 0.5, "y": 0.5, "button": "left"})
-    await asyncio.sleep(0.4)
-    assert {"type": "focus", "editable": True} in sent
-    assert any(m == "Runtime.evaluate" for m, _ in s._cdp.calls)
-
-    s._cdp = _FakeCDP(editable=False)
-    s._send = collect
-    sent.clear()
-    await s.dispatch({"t": "up", "x": 0.5, "y": 0.5, "button": "left"})
-    await asyncio.sleep(0.4)
-    assert {"type": "focus", "editable": False} in sent

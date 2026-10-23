@@ -32,15 +32,6 @@ _EDIT_COMMANDS = {
 _WORD_COMMANDS = {"Backspace": "deleteWordBackward", "Delete": "deleteWordForward",
                   "ArrowLeft": "moveWordLeft", "ArrowRight": "moveWordRight"}
 _DOC_COMMANDS = {"Home": "moveToBeginningOfDocument", "End": "moveToEndOfDocument"}
-# True when the focused element on the page takes typing (a text box, a text area, or editable content).
-_EDITABLE_JS = """(() => {
-  const e = document.activeElement;
-  if (!e) return false;
-  if (e.isContentEditable) return true;
-  const tag = e.tagName;
-  if (tag === "TEXTAREA") return true;
-  return tag === "INPUT" && !/^(button|checkbox|radio|submit|reset|file|image|range|color|hidden)$/i.test(e.type || "text");
-})()"""
 # Shift extends the selection with the same movement (Chromium's "...AndModifySelection" commands).
 _SELECTABLE = {"ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"}
 # Ctrl/Cmd shortcuts for text: the letter -> the command. Ctrl+Shift+Z is redo.
@@ -141,23 +132,6 @@ class LiveStreamer:
     def _to_px(self, nx: float, ny: float):
         return nx * self._meta["w"], ny * self._meta["h"]
 
-    def _schedule_focus(self) -> None:
-        """Tell the viewer whether the page now has a text box focused (after the click has taken effect)."""
-        task = asyncio.ensure_future(self._report_focus())
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-    async def _report_focus(self) -> None:
-        await asyncio.sleep(0.15)
-        if not self._cdp or self._stopped:
-            return
-        try:
-            res = await self._cdp.send("Runtime.evaluate", {"expression": _EDITABLE_JS, "returnByValue": True})
-            editable = bool(((res or {}).get("result") or {}).get("value"))
-        except Exception:  # noqa: BLE001 - an unreadable page is not a text box
-            editable = False
-        await self._send({"type": "focus", "editable": editable})
-
     def _queue_move(self, x: float, y: float) -> None:
         """Keep the newest pointer position and send it; older positions in the meantime are dropped."""
         self._pending_move = (x, y)
@@ -227,8 +201,6 @@ class LiveStreamer:
                 if t != "move":
                     payload.update({"button": msg.get("button", "left"), "clickCount": 1})
                 await self._cdp.send("Input.dispatchMouseEvent", payload)
-                if t in ("down", "up"):
-                    self._schedule_focus()
             elif t == "wheel":
                 x, y = self._to_px(msg["x"], msg["y"])
                 await self._cdp.send("Input.dispatchMouseEvent", {
