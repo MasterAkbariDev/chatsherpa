@@ -243,33 +243,42 @@
   function withMods(o,e){ o.ctrl=!!(e.ctrlKey); o.meta=!!(e.metaKey); o.alt=!!(e.altKey); o.shift=!!(e.shiftKey); return o; }
 
   // Phone keyboards send text as input events, not keydown, so the text field below does the typing.
-  // Keyboards often rewrite the word they are still building (autocomplete, autocorrect, suggestions),
-  // so the field is not sent blindly: `mirror` is what the remote browser has received from this field,
-  // and each change sends only the difference. The field holds one space as a sentinel, so Backspace
-  // always changes it.
-  var kb=document.getElementById("kb"), SENT=" ", mirror="", remoteEditable=false;
-  function resetKb(){ kb.value=SENT; mirror=""; try{kb.setSelectionRange(1,1);}catch(_){} syncPh(); }
+  // The keyboard rewrites the word it is still building (suggestions, autocorrect, the space after a full stop),
+  // so nothing is sent and the field is left alone until that word is finished (compositionend). Then only
+  // the difference from what the remote browser already has is sent. `mirror` is that text. The field holds
+  // one space as a sentinel, so Backspace on an empty field is a Backspace on the page.
+  var kb=document.getElementById("kb"), SENT=" ", mirror="", remoteEditable=false, composing=false;
+  function resetKb(){ if(composing) return; kb.value=SENT; mirror=""; try{kb.setSelectionRange(1,1);}catch(_){} syncPh(); }
   function syncPh(){ document.getElementById("kbph").style.display = mirror==="" ? "block" : "none"; }
   function setEditable(on){
     remoteEditable=!!on;
     document.getElementById("typebar").classList.toggle("is-ready", on);
   }
   function openKeyboard(){ resetKb(); kb.focus({preventScroll:true}); }
-  // commit: the text has been sent and the bar is cleared. Not while the phone is still composing a word.
+  // Sends the difference between what the page has (`mirror`) and what the field now shows.
+  // commit: the word is finished, so the bar starts afresh. A finished word or a space ends the bar's text.
   function sync(commit){
-    // Compare with what the field showed last time, sentinel included: deleting the sentinel is a Backspace too.
-    var prev=SENT+mirror, now=kb.value, p=0;
-    while(p<prev.length && p<now.length && prev.charAt(p)===now.charAt(p)) p++;
-    for(var i=p;i<prev.length;i++){ send({t:"key",key:"Backspace"}); }
-    for(var j=p;j<now.length;j++){ var ch=now.charAt(j); if(ch==="\n") send({t:"key",key:"Enter"}); else send({t:"char",text:ch}); }
-    var text=now.charAt(0)===SENT ? now.slice(1) : now;
-    if(now.charAt(0)!==SENT){ kb.value=SENT+text; try{kb.setSelectionRange(1,1);}catch(_){} }
+    var now=kb.value, text, p=0, back;
+    // The sentinel space is not text. The keyboard may drop it by itself, which is not a Backspace.
+    text = now.charAt(0)===SENT ? now.slice(1) : now;
+    while(p<mirror.length && p<text.length && mirror.charAt(p)===text.charAt(p)) p++;
+    back = mirror.length - p;
+    // Nothing was on the page from this bar and the field is empty: the person pressed Backspace on it.
+    if(now==="" && mirror===""){ back=1; }
+    for(var i=0;i<back;i++){ send({t:"key",key:"Backspace"}); }
+    for(var j=p;j<text.length;j++){ var ch=text.charAt(j); if(ch==="\n") send({t:"key",key:"Enter"}); else send({t:"char",text:ch}); }
     mirror=text;
-    if(commit || text.length>200){ resetKb(); }
+    if(commit || text.length>200 || /\s$/.test(text)){ resetKb(); }
+    else if(!composing && kb.value!==SENT+text){ kb.value=SENT+text; try{kb.setSelectionRange(kb.value.length,kb.value.length);}catch(_){} }
     syncPh();
   }
-  kb.addEventListener("input",function(e){ sync(!(e.isComposing || e.inputType==="insertCompositionText")); });
-  kb.addEventListener("compositionend",function(){ sync(true); });
+  kb.addEventListener("compositionstart",function(){ composing=true; });
+  kb.addEventListener("input",function(e){
+    // While the keyboard is building a word, its rewrites are not sent: wait for the word to be finished.
+    if(composing || e.isComposing || e.inputType==="insertCompositionText") return;
+    sync(false);
+  });
+  kb.addEventListener("compositionend",function(){ composing=false; sync(true); });
   kb.addEventListener("keydown",function(e){
     if(e.isComposing||done) return;
     if(isPasteKey(e)) return;   // the paste event brings in the text on this device
