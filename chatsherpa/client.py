@@ -112,8 +112,13 @@ class ChatSherpa:
                 page = getattr(prov, "page", None)
                 follow = asyncio.ensure_future(self._follow_thread(provider_cls, uid, page, chat)) if page else None
                 try:
-                    text = await prov.send(prompt, model=model, model_order=model_order, on_model=on_model,
-                                           on_text=on_text, on_status=on_status)
+                    try:
+                        text = await prov.send(prompt, model=model, model_order=model_order, on_model=on_model,
+                                               on_text=on_text, on_status=on_status)
+                    except asyncio.CancelledError:
+                        # The person stopped the reply: stop the provider writing it too.
+                        await prov.stop_generating()
+                        raise
                     media = list(getattr(prov, "last_media", None) or [])
                     if on_media and media:
                         on_media(media)

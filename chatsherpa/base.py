@@ -1142,6 +1142,21 @@ class BaseProvider:
         """Provider hook: the latest turn has finished generating."""
         return False
 
+    #: Buttons that stop a reply while it is written. The first one shown on the page is pressed.
+    stop_selectors: tuple = ('[data-testid="stop-button"]', 'button[aria-label*="Stop" i]')
+
+    async def stop_generating(self) -> bool:
+        """Press the provider's stop button while its reply is written. Returns whether one was pressed. Never raises."""
+        try:
+            for selector in self.stop_selectors:
+                button = self.page.locator(selector).first
+                if await button.count() and await button.is_visible():
+                    await button.click(timeout=3_000)
+                    return True
+        except Exception as exc:  # noqa: BLE001 - a page that cannot be stopped is left as it is
+            log.debug("[%s] stop button not pressed: %s", self.name, exc)
+        return False
+
     async def _has_picture(self) -> bool:
         """Whether the latest turn shows a picture that has finished loading. Icons are displayed small and do not count."""
         try:

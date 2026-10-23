@@ -380,9 +380,10 @@ class LoginServer:
                 try:
                     await response.write((json.dumps(event) + "\n").encode())
                 except ConnectionError:
-                    # The browser went away. The ask still finishes, so the warm bridge is
-                    # left in a clean state, and the rest of the reply is simply not sent.
+                    # The browser went away, so the reply is stopped: the provider's stop button is pressed and
+                    # nothing is kept. The ask ends cleanly, so the warm bridge is left in a clean state.
                     connected = False
+                    task.cancel()
         if connected:
             await response.write_eof()
         return response

@@ -84,3 +84,19 @@ async def test_a_video_is_kept_in_its_place_with_its_picture_marker():
         markdown = await prov._assistant_markdown()
         await browser.close()
     assert markdown == "Here is the video.\n\n![picture](chatsherpa-picture:0)\n\nEnjoy."
+
+
+async def test_stopping_presses_the_providers_stop_button_when_it_is_shown():
+    from playwright.async_api import async_playwright
+
+    html = '<button data-testid="stop-button" onclick="window.pressed = true">Stop</button>'
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.set_content(html)
+        prov = _Gemini.attach(page, ProviderConfig(headless=True))
+        assert await prov.stop_generating() is True
+        assert await page.evaluate("window.pressed === true") is True
+        await page.set_content("<p>No reply is being written.</p>")
+        assert await prov.stop_generating() is False
+        await browser.close()
