@@ -203,6 +203,22 @@ class ProviderConfig:
     model_order: Optional[List[str]] = None
 
 
+_PICTURE_MARKER = re.compile(r"!\[[^\]]*\]\(chatsherpa-picture:(\d+)\)")
+
+
+def _renumber_pictures(text: str, media: list) -> str:
+    """The reply's pictures are kept in page order. Each marker in the text takes the position its picture was kept
+    at; a picture that could not be read loses its marker too, so the text never points at a missing picture."""
+    position = {}
+    for index, picture in enumerate(media):
+        dom = picture.pop("index", None)
+        if dom is not None:
+            position[str(dom)] = index
+    text = _PICTURE_MARKER.sub(lambda m: f"![picture](chatsherpa-picture:{position[m.group(1)]})" if m.group(1) in position else "", text)
+    # A removed marker leaves its blank lines behind; they are closed up.
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
 class BaseProvider:
     """Abstract driver for a single AI chat web UI.
 
@@ -587,6 +603,7 @@ class BaseProvider:
         result = (await self._assistant_markdown()) or text
         self._raise_if_busy(result)
         self.last_media = await self._capture_media(expect_picture=bool(_PICTURE_REQUEST.search(prompt or "")))
+        result = _renumber_pictures(result, self.last_media)
         log.info("[%s] received %d chars", self.name, len(result))
         return result
 
@@ -769,7 +786,7 @@ class BaseProvider:
         if (img.naturalWidth > 0) {
           try {
             const picture = fromPage(img);
-            if (picture) { out.push({ mime: picture.mime, data: picture.data, alt: img.alt || '' }); continue; }
+            if (picture) { out.push({ mime: picture.mime, data: picture.data, alt: img.alt || '', index: img.getAttribute('data-cs-pic') }); continue; }
           } catch (e) {
             // Not readable from the page (cross-origin): fetched below.
           }
@@ -782,7 +799,7 @@ class BaseProvider:
           const blob = await res.blob();
           const mime = (blob.type || '').split(';')[0];
           if (!/^image\/(png|jpeg|webp|gif)$/.test(mime) || blob.size > limits.bytes) continue;
-          out.push({ mime, data: await readAsBase64(blob), alt: img.alt || '' });
+          out.push({ mime, data: await readAsBase64(blob), alt: img.alt || '', index: img.getAttribute('data-cs-pic') });
         } catch (e) {
           // A picture the page will not hand over (for example an expired link) is skipped.
         }
@@ -826,7 +843,11 @@ class BaseProvider:
           case 'ol': return '\n' + Array.from(node.children).map((li, i) => (i + 1) + '. ' + walk(li).trim()).join('\n') + '\n';
           case 'li': return kids();
           case 'a': { const h = node.getAttribute('href'); const t = kids().trim(); return h ? '[' + t + '](' + h + ')' : t; }
-          case 'img': { const s = node.getAttribute('src') || ''; const a = node.getAttribute('alt') || 'image'; return '![' + a + '](' + s + ')'; }
+          case 'img': {
+            // A picture of the reply is marked where it sits in the text (see _REPLY_MD_JS).
+            if (node.hasAttribute('data-cs-pic')) return '![' + (node.getAttribute('alt') || 'picture') + '](chatsherpa-picture:' + node.getAttribute('data-cs-pic') + ')';
+            const s = node.getAttribute('src') || ''; const a = node.getAttribute('alt') || 'image'; return '![' + a + '](' + s + ')';
+          }
           case 'hr': return '\n---\n';
           case 'table': {
             // A GitHub-flavoured Markdown table. Cell text keeps its bold and code. A pipe in a
@@ -897,6 +918,34 @@ class BaseProvider:
             log.debug("[%s] media capture skipped: %s", self.name, exc)
             return []
 
+    #: The whole reply, in page order: each text block as Markdown, each picture as a marker where it sits. The
+    #: pictures are numbered in page order (the same numbers _MEDIA_JS reports), so the markers can be matched later.
+    _REPLY_MD_JS = "(input) => {\n  const md = " + _MD_JS.strip().rstrip(";") + ";\n" + r"""
+      const root = input.root;
+      const big = (i) => Math.max(i.naturalWidth, i.width) >= 96 && Math.max(i.naturalHeight, i.height) >= 96;
+      let k = 0;
+      for (const i of root.querySelectorAll('img')) {
+        i.removeAttribute('data-cs-pic');
+        if (big(i)) i.setAttribute('data-cs-pic', String(k++));
+      }
+      const parts = [];
+      const visit = (node) => {
+        if (node.nodeType !== 1) return;
+        if (node.tagName === 'IMG') {
+          if (node.hasAttribute('data-cs-pic')) parts.push('![picture](chatsherpa-picture:' + node.getAttribute('data-cs-pic') + ')');
+          return;
+        }
+        if (input.text && node.matches(input.text)) {
+          const text = md(node);
+          if (text && text.trim()) parts.push(text.trim());
+          return;
+        }
+        for (const child of node.children) visit(child);
+      };
+      visit(root);
+      return parts.join('\n\n');
+    }"""
+
     async def _assistant_markdown(self, text_fallback: bool = True) -> str:
         """The latest reply as Markdown (structure preserved). Falls back to text.
 
@@ -904,10 +953,11 @@ class BaseProvider:
         hold reasoning. Streaming uses that, so only the Markdown answer is ever sent.
         """
         try:
-            loc = self.page.locator(self.assistant_message_selector).last
+            root_selector = self.media_selector or self.assistant_message_selector
+            loc = self.page.locator(root_selector).last
             if await loc.count():
                 handle = await loc.element_handle()
-                md = await self.page.evaluate(self._MD_JS, handle)
+                md = await self.page.evaluate(self._REPLY_MD_JS, {"root": handle, "text": self.assistant_message_selector})
                 if md and md.strip():
                     return md.strip()
         except Exception:
