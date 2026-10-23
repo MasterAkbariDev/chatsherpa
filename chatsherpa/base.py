@@ -550,6 +550,7 @@ class BaseProvider:
         text = await self._wait_for_stable_response()
         result = (await self._assistant_markdown()) or text
         self._raise_if_busy(result)
+        self.last_media = await self._capture_media()
         log.info("[%s] received %d chars", self.name, len(result))
         return result
 
@@ -694,6 +695,44 @@ class BaseProvider:
 
     # Serialize a DOM element to Markdown so replies keep structure (code blocks,
     # quotes, lists, links, images) instead of flattening to plain text.
+    #: Images the model returned in its last reply, as {mime, data, alt}. Set by ``send``.
+    last_media: list = []
+
+    #: Largest image we keep, and how many per reply.
+    MEDIA_MAX_BYTES = 2 * 1024 * 1024
+    MEDIA_MAX_COUNT = 4
+
+    _MEDIA_JS = r"""async (input) => {
+      const el = input.el;
+      const limits = input;
+      if (!el) return [];
+      const out = [];
+      const imgs = Array.from(el.querySelectorAll('img'))
+        .filter(i => Math.max(i.naturalWidth, i.width) >= 96 && Math.max(i.naturalHeight, i.height) >= 96);
+      const readAsBase64 = (blob) => new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result).split(',')[1] || '');
+        r.onerror = () => reject(r.error);
+        r.readAsDataURL(blob);
+      });
+      for (const img of imgs) {
+        if (out.length >= limits.count) break;
+        const src = img.currentSrc || img.src;
+        if (!src) continue;
+        try {
+          const res = await fetch(src, { credentials: 'include' });
+          if (!res.ok) continue;
+          const blob = await res.blob();
+          const mime = (blob.type || '').split(';')[0];
+          if (!/^image\/(png|jpeg|webp|gif)$/.test(mime) || blob.size > limits.bytes) continue;
+          out.push({ mime, data: await readAsBase64(blob), alt: img.alt || '' });
+        } catch (e) {
+          // A picture the page will not hand over (for example an expired link) is skipped.
+        }
+      }
+      return out;
+    }"""
+
     _MD_JS = r"""(el) => {
       if (!el) return '';
       const walk = (node) => {
@@ -735,6 +774,22 @@ class BaseProvider:
       };
       return walk(el).replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
     }"""
+
+    async def _capture_media(self) -> list:
+        """Images in the latest reply, fetched through the signed-in page. Never raises."""
+        try:
+            loc = self.page.locator(self.assistant_message_selector).last
+            if not await loc.count():
+                return []
+            handle = await loc.element_handle()
+            found = await self.page.evaluate(
+                self._MEDIA_JS,
+                {"el": handle, "count": self.MEDIA_MAX_COUNT, "bytes": self.MEDIA_MAX_BYTES},
+            )
+            return list(found or [])
+        except Exception as exc:  # noqa: BLE001 - a reply without pictures must still return
+            log.debug("[%s] media capture skipped: %s", self.name, exc)
+            return []
 
     async def _assistant_markdown(self) -> str:
         """The latest reply as Markdown (structure preserved). Falls back to text."""

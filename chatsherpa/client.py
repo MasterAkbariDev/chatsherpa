@@ -67,7 +67,7 @@ class ChatSherpa:
                   model_order: Optional[list] = None,
                   new_chat: bool = False,
                   account: Optional[int] = None,
-                  on_model=None, chat: str = DEFAULT_CHAT) -> str:
+                  on_model=None, on_media=None, chat: str = DEFAULT_CHAT) -> str:
         """Send ``prompt`` into the user's named ``chat``.
 
         A chat that already exists is continued; a new name starts a fresh
@@ -98,6 +98,9 @@ class ChatSherpa:
         try:
             async with lease as prov:
                 text = await prov.send(prompt, model=model, model_order=model_order, on_model=on_model)
+                media = list(getattr(prov, "last_media", None) or [])
+                if on_media and media:
+                    on_media(media)
                 await self._remember_thread(provider_cls, uid, prov.page, chat)
         except LoginRequiredError as exc:
             await self.pool.drop(uid, provider_cls.name)

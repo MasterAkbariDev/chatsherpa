@@ -174,17 +174,20 @@ class LoginServer:
         prompt = body.get("prompt")
         if provider not in REGISTRY or not isinstance(prompt, str) or not prompt.strip():
             return web.json_response({"error": "provider and prompt are required"}, status=400)
-        used = {"model": None}
+        used = {"model": None, "media": []}
 
         def on_model(name):
             used["model"] = name
+
+        def on_media(items):
+            used["media"] = items
 
         try:
             text = await self.bridge.ask(
                 provider, str(body.get("user_id", "local")), prompt,
                 model=body.get("model"), model_order=body.get("model_order"),
                 new_chat=bool(body.get("new_chat")), account=body.get("account"),
-                on_model=on_model, chat=body.get("chat") or "default",
+                on_model=on_model, on_media=on_media, chat=body.get("chat") or "default",
             )
         except LoginRequiredError as exc:
             return web.json_response({"error": "login_required", "message": str(exc)}, status=401)
@@ -201,7 +204,7 @@ class LoginServer:
         except Exception as exc:  # noqa: BLE001 - report any provider failure to the caller
             log.warning("ask failed: %s", exc)
             return web.json_response({"error": "failed", "message": str(exc)}, status=500)
-        return web.json_response({"text": text, "model": used["model"]})
+        return web.json_response({"text": text, "model": used["model"], "media": used["media"]})
 
     async def _h_connect(self, request):
         token = request.match_info["token"]
