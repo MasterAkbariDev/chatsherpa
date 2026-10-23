@@ -13,6 +13,7 @@ import asyncio
 import logging
 import time
 from typing import Optional, Union
+from urllib.parse import urlparse
 
 from .base import ProviderConfig
 from .events import ErrorType, Event, EventBus, EventType
@@ -32,6 +33,11 @@ from .store import DEFAULT_CHAT, DEFAULT_USER, MemorySessionStore, SessionStore
 log = logging.getLogger("chatsherpa.client")
 
 UserId = Union[str, int]
+
+
+def _chat_id(url: str) -> str:
+    """The provider's id for a conversation: the last part of its address, without the query."""
+    return urlparse(url).path.rstrip("/").rsplit("/", 1)[-1]
 
 
 class ChatSherpa:
@@ -68,7 +74,7 @@ class ChatSherpa:
                   new_chat: bool = False,
                   account: Optional[int] = None,
                   on_model=None, on_media=None, chat: str = DEFAULT_CHAT,
-                  on_text=None, on_status=None) -> str:
+                  on_text=None, on_status=None, on_new_conversation=None) -> str:
         """Send ``prompt`` into the user's named ``chat``.
 
         A chat that already exists is continued; a new name starts a fresh
@@ -115,6 +121,12 @@ class ChatSherpa:
                         await self._remember_thread(provider_cls, uid, prov.page, chat, wait_s=3 if done else 20)
                     except Exception:  # noqa: BLE001 - saving the address must not hide the reply's own result
                         pass
+                    # The chat had a conversation, but the provider answered in a different one (for example
+                    # after signing in to another account): say so, since the earlier messages are not in it.
+                    if done and thread and on_new_conversation is not None:
+                        url = prov.page.url
+                        if provider_cls.is_conversation(url) and _chat_id(url) != _chat_id(thread):
+                            on_new_conversation()
         except LoginRequiredError as exc:
             await self.pool.drop(uid, provider_cls.name)
             await self._error(provider_cls.name, uid, ErrorType.LOGIN_REQUIRED, str(exc))

@@ -220,7 +220,7 @@ class LoginServer:
         body = await self._read_ask(request)
         if isinstance(body, web.Response):
             return body
-        used = {"model": None, "media": []}
+        used = {"model": None, "media": [], "new_conversation": False}
 
         def on_model(name):
             used["model"] = name
@@ -228,14 +228,19 @@ class LoginServer:
         def on_media(items):
             used["media"] = items
 
+        def on_new_conversation():
+            used["new_conversation"] = True
+
         try:
-            text = await self._run_ask(body, on_model=on_model, on_media=on_media)
+            text = await self._run_ask(body, on_model=on_model, on_media=on_media,
+                                       on_new_conversation=on_new_conversation)
         except Exception as exc:  # noqa: BLE001 - report any provider failure to the caller
             status, code, message = _failure(exc)
             if code == "failed":
                 log.warning("ask failed: %s", exc)
             return web.json_response({"error": code, "message": message}, status=status)
-        return web.json_response({"text": text, "model": used["model"], "media": used["media"]})
+        return web.json_response({"text": text, "model": used["model"], "media": used["media"],
+                                  "newConversation": used["new_conversation"]})
 
     async def _h_api_ask_stream(self, request):
         """The same ask as ``/api/ask``, streamed as newline-delimited JSON.
@@ -257,7 +262,7 @@ class LoginServer:
             return body
         started = time.monotonic()
         events: asyncio.Queue = asyncio.Queue()
-        state = {"label": "Working", "model": None, "media": []}
+        state = {"label": "Working", "model": None, "media": [], "new_conversation": False}
 
         def elapsed_ms() -> int:
             return int((time.monotonic() - started) * 1000)
@@ -275,11 +280,16 @@ class LoginServer:
         def on_media(items):
             state["media"] = items
 
+        def on_new_conversation():
+            state["new_conversation"] = True
+
         async def run():
             try:
                 text = await self._run_ask(body, on_model=on_model, on_media=on_media,
-                                           on_status=on_status, on_text=on_text)
-                events.put_nowait({"type": "done", "text": text, "model": state["model"], "media": state["media"]})
+                                           on_status=on_status, on_text=on_text,
+                                           on_new_conversation=on_new_conversation)
+                events.put_nowait({"type": "done", "text": text, "model": state["model"], "media": state["media"],
+                                   "newConversation": state["new_conversation"]})
             except Exception as exc:  # noqa: BLE001 - report any provider failure to the caller
                 status, code, message = _failure(exc)
                 if code == "failed":

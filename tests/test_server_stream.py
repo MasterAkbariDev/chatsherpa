@@ -24,7 +24,7 @@ class FakeStreamBridge:
 
     async def ask(self, provider, user_id, prompt, model=None, model_order=None,
                   new_chat=False, account=None, on_model=None, on_media=None, chat="default",
-                  on_text=None, on_status=None):
+                  on_text=None, on_status=None, on_new_conversation=None):
         self.calls.append((provider, prompt, chat))
         if on_model:
             on_model("Test Model")
@@ -77,7 +77,7 @@ async def test_stream_sends_status_text_and_a_final_done_line_in_order():
         assert all(isinstance(e["elapsedMs"], int) for e in events if e["type"] == "status")
         assert events[2] == {"type": "text", "delta": "Hel"}
         assert events[5] == {"type": "text", "replace": "Help"}
-        assert events[-1] == {"type": "done", "text": "Help", "model": "Test Model", "media": []}
+        assert events[-1] == {"type": "done", "text": "Help", "model": "Test Model", "media": [], "newConversation": False}
         assert bridge.calls == [("chatgpt", "hi", "planning")]
     finally:
         await client.close()
@@ -142,7 +142,7 @@ async def test_chatsherpa_ask_passes_the_text_and_status_callbacks_to_the_provid
     class Provider:
         page = SimpleNamespace(url="https://chatgpt.com/c/abc")
 
-        async def send(self, prompt, model=None, model_order=None, on_model=None, on_text=None, on_status=None):
+        async def send(self, prompt, model=None, model_order=None, on_model=None, on_text=None, on_status=None, on_new_conversation=None):
             seen["callbacks"] = (on_text is not None, on_status is not None)
             on_status("Working")
             on_text("Hi")

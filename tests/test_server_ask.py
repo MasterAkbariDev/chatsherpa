@@ -15,7 +15,7 @@ class FakeBridge:
         self.calls = []                     # (provider, user_id, prompt, chat)
 
     async def ask(self, provider, user_id, prompt, model=None, model_order=None,
-                  new_chat=False, account=None, on_model=None, on_media=None, chat="default"):
+                  new_chat=False, account=None, on_model=None, on_media=None, chat="default", on_new_conversation=None):
         self.calls.append((provider, user_id, prompt, chat))
         if self.error:
             raise self.error
@@ -41,7 +41,7 @@ async def test_ask_returns_text_and_model_and_passes_the_chat_name():
     try:
         resp = await client.post("/api/ask", json={"provider": "chatgpt", "prompt": "hi", "chat": "planning"})
         assert resp.status == 200
-        assert await resp.json() == {"text": "echo: hi", "model": "Test Model", "media": []}
+        assert await resp.json() == {"text": "echo: hi", "model": "Test Model", "media": [], "newConversation": False}
         assert bridge.calls == [("chatgpt", "local", "hi", "planning")]
     finally:
         await client.close()
