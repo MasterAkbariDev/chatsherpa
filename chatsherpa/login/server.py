@@ -165,14 +165,28 @@ class LoginServer:
                 await self.bus.emit(Event(EventType.LOGIN_SUCCEEDED, provider=provider_cls.name,
                                           user_id=pending.user_id))
                 return
+            # Say what the page shows, so a sign-in that is not recognised can be seen and fixed.
+            detail = await self._describe(prov)
             await send_json({"type": "check", "ok": False,
-                             "message": "Not signed in yet. Finish signing in, then press Check again."})
+                             "message": f"Not signed in yet ({detail}). Finish signing in, then press Check again."
+                             if detail else "Not signed in yet. Finish signing in, then press Check again."})
         except Exception as exc:  # noqa: BLE001 - a check that cannot run says so on the page
             log.warning("manual check for %s could not run: %s", provider_cls.name, exc)
             await send_json({"type": "check", "ok": False,
                              "message": "The check could not run. Press Check again."})
         finally:
             pending.checking = False
+
+    @staticmethod
+    async def _describe(prov) -> str:
+        """The provider's own account of the page, when it has one ("" when it does not, or it cannot say)."""
+        diagnose = getattr(prov, "diagnose", None)
+        if diagnose is None:
+            return ""
+        try:
+            return str(await asyncio.wait_for(diagnose(), 10))
+        except Exception:  # noqa: BLE001 - a description that fails is left out
+            return ""
 
     @staticmethod
     async def _probe(prov) -> bool:

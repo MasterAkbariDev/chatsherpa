@@ -91,3 +91,35 @@ async def test_a_second_press_while_a_check_runs_does_nothing():
     await server._manual_check(pending, send_json)
     assert FakeProvider.probes == 0
     assert sent == []
+
+
+class DescribingProvider(FakeProvider):
+    name = "describing"
+
+    @classmethod
+    def attach(cls, page, config=None):
+        prov = super().attach(page, config)
+
+        async def diagnose():
+            return "page accounts.example.test/signin; message box not shown"
+
+        prov.diagnose = diagnose
+        return prov
+
+
+async def test_a_failed_check_says_what_the_page_shows():
+    FakeProvider.answers = [False]
+    FakeProvider.probes = 0
+    server = LoginServer(store=MemorySessionStore(), public_base_url="https://login.example.com")
+    pending = server.broker.create(DescribingProvider, "user-1")
+    pending.page = FakePage("https://accounts.example.test/signin")
+    pending.context = FakeContext()
+    sent = []
+
+    async def send_json(obj):
+        sent.append(obj)
+
+    await server._manual_check(pending, send_json)
+    assert sent == [{"type": "check", "ok": False,
+                     "message": "Not signed in yet (page accounts.example.test/signin; message box not shown). "
+                                "Finish signing in, then press Check again."}]

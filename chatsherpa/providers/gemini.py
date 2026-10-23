@@ -84,6 +84,24 @@ class GeminiProvider(BaseProvider):
             await asyncio.sleep(0.4)
         return False
 
+    async def diagnose(self) -> str:
+        """What the page shows, in words, for a sign-in that was not recognised: the same three signals
+        is_logged_in reads, and the address's host and path (no query, no account ids)."""
+        try:
+            composer = self.page.locator(self.input_selector)
+            has_composer = bool(await composer.count()) and await composer.first.is_visible()
+            account = bool(await self.page.locator(self._SIGNED_IN).count())
+            wall = bool(await self.page.locator(self._SIGN_IN_WALL).count())
+        except Exception as exc:  # noqa: BLE001 - a page that cannot be read says so
+            return f"the page could not be read ({str(exc)[:80]})"
+        where = urlparse(self.page.url)
+        return (
+            f"page {where.hostname or ''}{where.path}; "
+            f"message box {'shown' if has_composer else 'not shown'}, "
+            f"Google account button {'found' if account else 'not found'}, "
+            f"sign-in link {'shown' if wall else 'not shown'}"
+        )
+
     # Gemini's composer is a Quill contenteditable (`.ql-editor`). Enter submits.
     input_selector = "div.ql-editor[contenteditable='true']"
     input_is_contenteditable = True
