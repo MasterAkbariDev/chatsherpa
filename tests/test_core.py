@@ -388,3 +388,10 @@ def test_a_reply_that_only_announces_a_picture_is_recognised_as_pending():
     assert _IMAGE_PENDING.match("creating an image of a dog")
     assert not _IMAGE_PENDING.match("Here is your photo of a dog.")
     assert not _IMAGE_PENDING.match("The image shows a dog.")
+
+
+def test_video_and_image_announcements_are_told_apart():
+    from chatsherpa.base import BaseProvider, _IMAGE_PENDING
+    assert _IMAGE_PENDING.match("Generating video…").group(3).lower().startswith("video")
+    assert not _IMAGE_PENDING.match("Generating image…").group(3).lower().startswith("video")
+    assert BaseProvider.VIDEO_WAIT_S == 600.0 and BaseProvider.IMAGE_WAIT_S == 300.0
