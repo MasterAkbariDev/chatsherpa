@@ -77,7 +77,8 @@ class LoginServer:
         self.store = store
         # Real sign-in checks, cached: {"user:provider": (checked_at, signed_in)}.
         self._login_checks: dict = {}
-        self._check_lock = asyncio.Lock()
+        # One check at a time per provider (not per server), so the providers are checked side by side.
+        self._check_locks: dict = {}
         self.public_base_url = public_base_url.rstrip("/")
         self.bus = bus or EventBus()
         self.headless = headless
@@ -356,6 +357,7 @@ class LoginServer:
     #: A connected answer is trusted this long; a not-connected one only briefly, so a new sign-in shows soon.
     LOGIN_CHECK_TTL_CONNECTED_S = 300.0
     LOGIN_CHECK_TTL_NOT_CONNECTED_S = 15.0
+    LOGIN_CHECK_TIMEOUT_S = 15.0
 
     async def _check_login(self, provider: str, user_id: str) -> bool:
         """Whether the provider accepts this user's saved session, checked in the server's browser.
@@ -369,7 +371,8 @@ class LoginServer:
             ttl = self.LOGIN_CHECK_TTL_CONNECTED_S if cached[1] else self.LOGIN_CHECK_TTL_NOT_CONNECTED_S
             if time.monotonic() - cached[0] < ttl:
                 return cached[1]
-        async with self._check_lock:
+        lock = self._check_locks.setdefault(key, asyncio.Lock())
+        async with lock:
             cached = self._login_checks.get(key)
             if cached and time.monotonic() - cached[0] < (
                 self.LOGIN_CHECK_TTL_CONNECTED_S if cached[1] else self.LOGIN_CHECK_TTL_NOT_CONNECTED_S
@@ -383,7 +386,8 @@ class LoginServer:
                     lease = await self.bridge.pool.lease(provider_cls, session, user_id,
                                                          start_url=provider_cls.home_url)
                     async with lease as prov:
-                        signed_in = bool(await prov.is_logged_in())
+                        # A check that takes longer than this says not connected, so the page does not wait.
+                        signed_in = bool(await asyncio.wait_for(prov.is_logged_in(), self.LOGIN_CHECK_TIMEOUT_S))
             except Exception as exc:  # noqa: BLE001 - a check that cannot run is not connected
                 log.warning("sign-in check for %s could not run: %s", provider, exc)
                 signed_in = False
