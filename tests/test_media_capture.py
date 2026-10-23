@@ -31,3 +31,37 @@ async def test_images_in_a_reply_come_back_as_bytes_and_other_content_is_ignored
     # The icon is too small and the SVG is not a kept type, so only the chart remains.
     assert [(m["mime"], m["alt"]) for m in found] == [("image/png", "chart")]
     assert base64.b64decode(found[0]["data"])[:4] == b"\x89PNG"
+
+
+async def test_a_picture_still_loading_is_waited_for():
+    import asyncio
+    from playwright.async_api import async_playwright
+
+    html = """
+    <div class="reply">
+      <p>Here is the cat.</p>
+      <img alt="cat" width="200" height="200" src="http://slow.test/cat.png">
+    </div>"""
+
+    async def slow(route):
+        await asyncio.sleep(2.0)
+        await route.fulfill(status=200, content_type="image/png", body=base64.b64decode(PNG_1x1))
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.route("http://slow.test/cat.png", slow)
+        await page.set_content(html)
+
+        class _Provider(BaseProvider):
+            name = "media-wait"
+            assistant_message_selector = ".reply"
+            MEDIA_WAIT_S = 20.0
+
+            @property
+            def page(self):
+                return page
+
+        found = await _Provider()._capture_media()
+        await browser.close()
+    assert [(m["mime"], m["alt"]) for m in found] == [("image/png", "cat")]

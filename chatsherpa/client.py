@@ -100,12 +100,21 @@ class ChatSherpa:
         lease = await self.pool.lease(provider_cls, session, uid, start_url=thread)
         try:
             async with lease as prov:
-                text = await prov.send(prompt, model=model, model_order=model_order, on_model=on_model,
-                                       on_text=on_text, on_status=on_status)
-                media = list(getattr(prov, "last_media", None) or [])
-                if on_media and media:
-                    on_media(media)
-                await self._remember_thread(provider_cls, uid, prov.page, chat)
+                done = False
+                try:
+                    text = await prov.send(prompt, model=model, model_order=model_order, on_model=on_model,
+                                           on_text=on_text, on_status=on_status)
+                    media = list(getattr(prov, "last_media", None) or [])
+                    if on_media and media:
+                        on_media(media)
+                    done = True
+                finally:
+                    # Keep the chat's address even when this reply failed: the provider may still finish it
+                    # (an image can take half a minute after the text), and the next ask must continue it.
+                    try:
+                        await self._remember_thread(provider_cls, uid, prov.page, chat, wait_s=3 if done else 20)
+                    except Exception:  # noqa: BLE001 - saving the address must not hide the reply's own result
+                        pass
         except LoginRequiredError as exc:
             await self.pool.drop(uid, provider_cls.name)
             await self._error(provider_cls.name, uid, ErrorType.LOGIN_REQUIRED, str(exc))
@@ -150,9 +159,10 @@ class ChatSherpa:
         await self.bus.emit(Event(EventType.LOGIN_SUCCEEDED, provider=provider_cls.name,
                                   user_id=str(user_id)))
 
-    async def _remember_thread(self, provider_cls, user_id: str, page, chat: str = DEFAULT_CHAT) -> None:
+    async def _remember_thread(self, provider_cls, user_id: str, page, chat: str = DEFAULT_CHAT,
+                               wait_s: float = 3) -> None:
         """Keep the chat URL under ``chat`` so the next ask continues it instead of opening a new one."""
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + wait_s
         url = page.url
         while not provider_cls.is_conversation(url) and time.monotonic() < deadline:
             await asyncio.sleep(0.25)

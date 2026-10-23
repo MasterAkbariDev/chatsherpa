@@ -807,18 +807,34 @@ class BaseProvider:
       return walk(el).replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
     }"""
 
+    #: Longest wait for a picture that is still loading when the text is done (images are made after the text).
+    MEDIA_WAIT_S = 30.0
+
     async def _capture_media(self) -> list:
-        """Images in the latest reply, fetched through the signed-in page. Never raises."""
+        """Images in the latest reply, fetched through the signed-in page. Never raises.
+
+        A picture that is still loading is waited for (providers finish the text first and the image
+        after), up to MEDIA_WAIT_S. A reply whose pictures are all loaded returns at once.
+        """
         try:
             loc = self.page.locator(self.assistant_message_selector).last
             if not await loc.count():
                 return []
             handle = await loc.element_handle()
-            found = await self.page.evaluate(
-                self._MEDIA_JS,
-                {"el": handle, "count": self.MEDIA_MAX_COUNT, "bytes": self.MEDIA_MAX_BYTES},
-            )
-            return list(found or [])
+            deadline = time.monotonic() + self.MEDIA_WAIT_S
+            while True:
+                found = await self.page.evaluate(
+                    self._MEDIA_JS,
+                    {"el": handle, "count": self.MEDIA_MAX_COUNT, "bytes": self.MEDIA_MAX_BYTES},
+                )
+                if found or time.monotonic() >= deadline:
+                    return list(found or [])
+                loading = await handle.evaluate(
+                    "el => [...el.querySelectorAll('img')].filter(i => i.src && !i.complete).length"
+                )
+                if not loading:
+                    return []
+                await asyncio.sleep(1.0)
         except Exception as exc:  # noqa: BLE001 - a reply without pictures must still return
             log.debug("[%s] media capture skipped: %s", self.name, exc)
             return []
