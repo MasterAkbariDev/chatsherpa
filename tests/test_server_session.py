@@ -62,14 +62,14 @@ async def test_a_stored_session_is_connected_when_the_provider_accepts_it():
 
     async def accepted(provider, user_id):
         calls.append((provider, user_id))
-        return True
+        return True, False
 
     server._check_login = accepted
     try:
         resp = await client.post("/api/session", json={"provider": "ChatGPT", "user_id": "42"})
         assert resp.status == 200
         body = await resp.json()
-        assert body == {"provider": "chatgpt", "signed_in": True, "stored": True}
+        assert body == {"provider": "chatgpt", "signed_in": True, "stored": True, "stale": False}
         assert calls == [("chatgpt", "42")]
         # Only the boolean leaves the server: no cookie or storage contents in the reply.
         assert COOKIE_VALUE not in await resp.text()
@@ -83,12 +83,12 @@ async def test_a_stored_session_the_provider_refuses_is_not_connected():
     client, server = await _client(store=store)
 
     async def refused(provider, user_id):
-        return False
+        return False, False
 
     server._check_login = refused
     try:
         resp = await client.post("/api/session", json={"provider": "chatgpt", "user_id": "42"})
-        assert await resp.json() == {"provider": "chatgpt", "signed_in": False, "stored": True}
+        assert await resp.json() == {"provider": "chatgpt", "signed_in": False, "stored": True, "stale": False}
     finally:
         await client.close()
 
@@ -98,7 +98,7 @@ async def test_session_reports_signed_out_when_none_is_stored():
     try:
         resp = await client.post("/api/session", json={"provider": "grok", "user_id": "42"})
         assert resp.status == 200
-        assert await resp.json() == {"provider": "grok", "signed_in": False, "stored": False}
+        assert await resp.json() == {"provider": "grok", "signed_in": False, "stored": False, "stale": False}
     finally:
         await client.close()
 
@@ -109,7 +109,7 @@ async def test_session_agrees_with_the_library_has_session():
     client, server = await _client(store=store)
 
     async def refused(provider, user_id):
-        return False
+        return False, False
 
     server._check_login = refused
     try:

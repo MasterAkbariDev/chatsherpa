@@ -80,8 +80,8 @@ class LoginServer:
         self._login_checks: dict = {}
         # One check at a time per provider (not per server), so the providers are checked side by side.
         self._check_locks: dict = {}
-        # Keys whose cached answer is being refreshed in the background.
-        self._refreshing: set = set()
+        # The running sign-in check for each account and provider, so one check runs at a time per key.
+        self._refreshing: dict = {}
         self.public_base_url = public_base_url.rstrip("/")
         self.bus = bus or EventBus()
         self.headless = headless
@@ -406,67 +406,80 @@ class LoginServer:
         user_id = str(body.get("user_id", "local"))
         session = await self.store.get(user_id, provider)
         stored = bool(session and not session.is_empty())
-        signed_in = await self._check_login(provider, user_id) if stored else False
-        return web.json_response({"provider": REGISTRY[provider].name, "signed_in": signed_in, "stored": stored})
+        signed_in, stale = await self._check_login(provider, user_id) if stored else (False, False)
+        return web.json_response({"provider": REGISTRY[provider].name, "signed_in": signed_in, "stored": stored,
+                                  "stale": stale})
 
     #: A connected answer is trusted this long; a not-connected one only briefly, so a new sign-in shows soon.
     LOGIN_CHECK_TTL_CONNECTED_S = 300.0
     LOGIN_CHECK_TTL_NOT_CONNECTED_S = 15.0
     LOGIN_CHECK_TIMEOUT_S = 30.0
+    #: A fresh check that is due replaces the last answer if it finishes within this time, so the page shows the
+    #: real state at once. Past it, the last answer is shown as stale and the page checks again.
+    LOGIN_CHECK_WAIT_S = 8.0
 
-    async def _check_login(self, provider: str, user_id: str) -> bool:
+    async def _check_login(self, provider: str, user_id: str) -> tuple[Optional[bool], bool]:
         """Whether the provider accepts this user's saved session, checked in the server's browser.
 
-        The check opens the provider with the saved session and reads its sign-in state. Results are
-        cached briefly. A check that cannot run says not connected.
+        Returns (signed_in, stale). signed_in is None when no check could be made yet. stale is True when the
+        answer is the last known one and a fresh check is still running; the page then checks again shortly.
         """
         key = f"{user_id}:{provider}"
         cached = self._login_checks.get(key)
-        if cached is None:
-            # Nothing is known yet: the first answer has to wait for the browser check.
-            return await self._run_login_check(key, provider, user_id)
-        if self._stale(cached):
-            # Answer at once with the last result, and refresh it in the background. A browser check can take
-            # 30 seconds, and the page polls status, so it must never wait for one.
-            self._refresh_in_background(key, provider, user_id)
-        return cached[1]
+        if cached is not None and not self._stale(cached):
+            return cached[1], False
+        # The first answer waits for the browser check. A stale one waits a short time for the fresh answer.
+        task = self._refresh_in_background(key, provider, user_id)
+        wait = self.LOGIN_CHECK_WAIT_S if cached is not None else None
+        try:
+            value = await asyncio.wait_for(asyncio.shield(task), wait)
+        except asyncio.TimeoutError:
+            return cached[1], True
+        # A check that could not run keeps the last answer (or none): the page is told to check again.
+        latest = self._login_checks.get(key)
+        again = value is None or latest is None or self._stale(latest)
+        return value, again
 
     def _stale(self, cached: tuple) -> bool:
         ttl = self.LOGIN_CHECK_TTL_CONNECTED_S if cached[1] else self.LOGIN_CHECK_TTL_NOT_CONNECTED_S
         return time.monotonic() - cached[0] >= ttl
 
-    def _refresh_in_background(self, key: str, provider: str, user_id: str) -> None:
-        if key in self._refreshing:
-            return
-        self._refreshing.add(key)
+    def _refresh_in_background(self, key: str, provider: str, user_id: str) -> asyncio.Future:
+        """The running check for this account and provider, or a new one. One check runs at a time per key."""
+        task = self._refreshing.get(key)
+        if task is None or task.done():
+            task = asyncio.ensure_future(self._run_login_check(key, provider, user_id))
+            self._refreshing[key] = task
+            task.add_done_callback(lambda done, k=key: self._refreshing.pop(k, None) if self._refreshing.get(k) is done else None)
+        return task
 
-        async def refresh():
-            try:
-                await self._run_login_check(key, provider, user_id)
-            finally:
-                self._refreshing.discard(key)
+    async def _browser_check(self, provider: str, user_id: str) -> bool:
+        """One check in the server's browser: open the provider with the saved session and read its sign-in state."""
+        provider_cls = REGISTRY[provider]
+        session = await self.store.get(user_id, provider)
+        if session is None or session.is_empty():
+            return False
+        lease = await self.bridge.pool.lease(provider_cls, session, user_id, start_url=provider_cls.home_url)
+        async with lease as prov:
+            # A check that takes longer than this says not connected, so the page does not wait.
+            return bool(await asyncio.wait_for(prov.is_logged_in(), self.LOGIN_CHECK_TIMEOUT_S))
 
-        asyncio.ensure_future(refresh())
-
-    async def _run_login_check(self, key: str, provider: str, user_id: str) -> bool:
+    async def _run_login_check(self, key: str, provider: str, user_id: str) -> Optional[bool]:
         lock = self._check_locks.setdefault(key, asyncio.Lock())
         async with lock:
             cached = self._login_checks.get(key)
             if cached is not None and not self._stale(cached):
                 return cached[1]
-            provider_cls = REGISTRY[provider]
-            signed_in = False
             try:
-                session = await self.store.get(user_id, provider)
-                if session is not None and not session.is_empty():
-                    lease = await self.bridge.pool.lease(provider_cls, session, user_id,
-                                                         start_url=provider_cls.home_url)
-                    async with lease as prov:
-                        # A check that takes longer than this says not connected, so the page does not wait.
-                        signed_in = bool(await asyncio.wait_for(prov.is_logged_in(), self.LOGIN_CHECK_TIMEOUT_S))
-            except Exception as exc:  # noqa: BLE001 - a check that cannot run is not connected
+                signed_in = await self._browser_check(provider, user_id)
+                # A connected account that now reads as not connected is checked once more: a page that is still
+                # loading can read as signed out, and one slow load should not change the answer.
+                if not signed_in and cached is not None and cached[1]:
+                    signed_in = await self._browser_check(provider, user_id)
+            except Exception as exc:  # noqa: BLE001 - a check that cannot run keeps the last answer
                 log.warning("sign-in check for %s could not run: %s", provider, exc)
-                signed_in = False
+                # With no earlier answer nothing is recorded, so the next request checks again.
+                return cached[1] if cached is not None else None
             self._login_checks[key] = (time.monotonic(), signed_in)
             return signed_in
 
