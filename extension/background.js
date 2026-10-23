@@ -235,10 +235,28 @@ async function readOrigin(cfg) {
   return found;
 }
 
+// Gemini's signed-in cookies. Without one, the browser is not signed in to Gemini.
+const SIGN_IN_COOKIE = { gemini: "__Secure-1PSID" };
+
+// What a refused upload means, in words the person can act on.
+function explainRefusal(status, code, cfg) {
+  if (status === 410) return "This sign-in link has expired. Start a new sign-in from the Accounts page, then capture again.";
+  if (code === "no session data") return "No sign-in data reached the server. Sign in to " + cfg.provider + " in this browser, then capture again.";
+  if (code === "bad json") return "The server could not read the capture. Reload the capture page and try again.";
+  return "The ChatSherpa server refused the capture (status " + status + (code ? ", " + code : "") + ").";
+}
+
 async function capture(cfg) {
   try {
     const cookies = await allCookies(cfg);
-    if (!cookies.length) return { ok: false, error: "no cookies — are you logged in?" };
+    if (!cookies.length) return { ok: false, error: "No cookies for " + cfg.provider + " in this browser. Sign in there, then capture again." };
+    const signIn = SIGN_IN_COOKIE[cfg.provider];
+    if (signIn && !cookies.some((c) => c.name.indexOf(signIn) === 0)) {
+      return {
+        ok: false,
+        error: "This browser is not signed in to " + cfg.provider + " (no " + signIn + " cookie). Sign in at gemini.google.com in this same browser, let the page load, then capture again.",
+      };
+    }
     const origin = await readOrigin(cfg);
     const account = cfg.provider === "gemini"
       ? (cfg.account === 0 || cfg.account ? { index: Number(cfg.account), home: "https://gemini.google.com/u/" + cfg.account + "/app" } : geminiHome(origin && origin.tabUrl))
@@ -279,14 +297,23 @@ async function capture(cfg) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const code = body && typeof body.error === "string" ? body.error : "";
+      return { ok: false, status: res.status, error: explainRefusal(res.status, code, cfg) };
+    }
     return {
-      ok: res.ok,
+      ok: true,
       status: res.status,
       account: account ? account.index : undefined,
       email: cfg.email || undefined,
     };
   } catch (e) {
-    return { ok: false, error: String(e) };
+    const text = String(e);
+    if (/Failed to fetch|NetworkError|Load failed/i.test(text)) {
+      return { ok: false, error: "Could not reach the ChatSherpa server. Check the connection and capture again." };
+    }
+    return { ok: false, error: text };
   }
 }
 
