@@ -782,6 +782,21 @@ class BaseProvider:
           case 'a': { const h = node.getAttribute('href'); const t = kids().trim(); return h ? '[' + t + '](' + h + ')' : t; }
           case 'img': { const s = node.getAttribute('src') || ''; const a = node.getAttribute('alt') || 'image'; return '![' + a + '](' + s + ')'; }
           case 'hr': return '\n---\n';
+          case 'table': {
+            // A GitHub-flavoured Markdown table. Cell text keeps its bold and code. A pipe in a
+            // cell is escaped, and a line break inside a cell becomes a space, so each row stays one line.
+            const cellText = (c) => walk(c).replace(/\s*\n\s*/g, ' ').replace(/\|/g, '\\|').trim();
+            const rows = Array.from(node.querySelectorAll('tr'))
+              .map(tr => Array.from(tr.children).filter(c => c.tagName === 'TH' || c.tagName === 'TD').map(cellText))
+              .filter(r => r.length > 0);
+            if (!rows.length) return kids();
+            const width = Math.max(...rows.map(r => r.length));
+            const pad = (r) => r.concat(Array(width - r.length).fill(''));
+            const head = pad(rows[0]);
+            const out = ['| ' + head.join(' | ') + ' |', '| ' + head.map(() => '---').join(' | ') + ' |'];
+            for (const r of rows.slice(1)) out.push('| ' + pad(r).join(' | ') + ' |');
+            return '\n' + out.join('\n') + '\n';
+          }
           case 'p': case 'div': return kids() + '\n';
           default: return kids();
         }
