@@ -75,6 +75,16 @@ class LoginServer:
         config: Optional[ProviderConfig] = None,
     ):
         self.store = store
+        # Which saved sessions have actually answered an ask. A stored session that the provider refuses
+        # (for example a Google session used from a server) is not "connected".
+        self._verified: dict = {}
+        store_dir = getattr(store, "dir", None)
+        self._verified_file = Path(store_dir) / "verified.json" if store_dir else None
+        if self._verified_file and self._verified_file.exists():
+            try:
+                self._verified = json.loads(self._verified_file.read_text("utf-8"))
+            except (OSError, ValueError):
+                self._verified = {}
         self.public_base_url = public_base_url.rstrip("/")
         self.bus = bus or EventBus()
         self.headless = headless
@@ -203,13 +213,32 @@ class LoginServer:
         body["provider"] = provider
         return body
 
+    def _mark_verified(self, user_id: str, provider: str, ok: bool) -> None:
+        key = f"{user_id}:{provider}"
+        if self._verified.get(key) == ok:
+            return
+        self._verified[key] = ok
+        if self._verified_file:
+            try:
+                self._verified_file.write_text(json.dumps(self._verified), "utf-8")
+            except OSError as exc:
+                log.warning("could not save the session status: %s", exc)
+
     async def _run_ask(self, body: dict, **callbacks) -> str:
-        return await self.bridge.ask(
-            body["provider"], str(body.get("user_id", "local")), body["prompt"],
-            model=body.get("model"), model_order=body.get("model_order"),
-            new_chat=bool(body.get("new_chat")), account=body.get("account"),
-            chat=body.get("chat") or "default", **callbacks,
-        )
+        user_id = str(body.get("user_id", "local"))
+        provider = body["provider"]
+        try:
+            text = await self.bridge.ask(
+                provider, user_id, body["prompt"],
+                model=body.get("model"), model_order=body.get("model_order"),
+                new_chat=bool(body.get("new_chat")), account=body.get("account"),
+                chat=body.get("chat") or "default", **callbacks,
+            )
+        except LoginRequiredError:
+            self._mark_verified(user_id, provider, False)
+            raise
+        self._mark_verified(user_id, provider, True)
+        return text
 
     async def _h_api_ask(self, request):
         """Send one prompt through the warm bridge and return the reply.
@@ -344,9 +373,13 @@ class LoginServer:
         provider = str(body.get("provider", "")).lower()
         if provider not in REGISTRY:
             return web.json_response({"error": "unknown provider"}, status=400)
-        session = await self.store.get(str(body.get("user_id", "local")), provider)
-        signed_in = bool(session and not session.is_empty())
-        return web.json_response({"provider": REGISTRY[provider].name, "signed_in": signed_in})
+        user_id = str(body.get("user_id", "local"))
+        session = await self.store.get(user_id, provider)
+        stored = bool(session and not session.is_empty())
+        # Connected means a stored session has answered an ask. A stored one that has not, or that the
+        # provider refused, is not shown as connected.
+        signed_in = stored and self._verified.get(f"{user_id}:{provider}") is True
+        return web.json_response({"provider": REGISTRY[provider].name, "signed_in": signed_in, "stored": stored})
 
     def _authorized(self, request) -> bool:
         return not self.api_secret or request.headers.get("X-ChatSherpa-Secret") == self.api_secret

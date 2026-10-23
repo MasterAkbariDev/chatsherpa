@@ -54,15 +54,19 @@ async def test_session_rejects_unknown_provider():
         await client.close()
 
 
-async def test_session_reports_signed_in_when_a_session_is_stored():
+async def test_a_stored_session_is_connected_only_after_it_has_answered():
     store = MemorySessionStore()
     await store.put("42", "chatgpt", SIGNED_IN_STATE)
-    client, _ = await _client(store=store)
+    client, server = await _client(store=store)
     try:
         resp = await client.post("/api/session", json={"provider": "ChatGPT", "user_id": "42"})
         assert resp.status == 200
+        # Stored but never used: not connected, since nothing shows the provider accepts it.
+        assert await resp.json() == {"provider": "chatgpt", "signed_in": False, "stored": True}
+        server._mark_verified("42", "chatgpt", True)
+        resp = await client.post("/api/session", json={"provider": "ChatGPT", "user_id": "42"})
         body = await resp.json()
-        assert body == {"provider": "chatgpt", "signed_in": True}
+        assert body == {"provider": "chatgpt", "signed_in": True, "stored": True}
         # Only the boolean leaves the server: no cookie or storage contents in the reply.
         assert COOKIE_VALUE not in await resp.text()
     finally:
@@ -74,7 +78,7 @@ async def test_session_reports_signed_out_when_none_is_stored():
     try:
         resp = await client.post("/api/session", json={"provider": "grok", "user_id": "42"})
         assert resp.status == 200
-        assert await resp.json() == {"provider": "grok", "signed_in": False}
+        assert await resp.json() == {"provider": "grok", "signed_in": False, "stored": False}
     finally:
         await client.close()
 
@@ -87,6 +91,6 @@ async def test_session_agrees_with_the_library_has_session():
         for user_id in ("42", "43"):
             resp = await client.post("/api/session", json={"provider": "gemini", "user_id": user_id})
             expected = await server.bridge.has_session("gemini", user_id)
-            assert (await resp.json())["signed_in"] is expected
+            assert (await resp.json())["stored"] is expected
     finally:
         await client.close()
