@@ -114,7 +114,16 @@
   function norm(ev){var r=canvas.getBoundingClientRect();return {x:Math.min(1,Math.max(0,(ev.clientX-r.left)/r.width)),y:Math.min(1,Math.max(0,(ev.clientY-r.top)/r.height))};}
   function send(o){ if(ws&&ws.readyState===1&&!done) ws.send(JSON.stringify(o)); }
   var btn={0:"left",1:"middle",2:"right"};
-  canvas.addEventListener("mousemove",function(e){var p=norm(e);send({t:"move",x:p.x,y:p.y});});
+  // Pointer moves are sent at most about 30 times a second, and the last position is always sent,
+  // so a click is never queued behind a flood of moves.
+  var lastMove=0, moveTimer=null, movePending=null, MOVE_MS=33;
+  function sendMove(p){
+    var now=Date.now();
+    if(now-lastMove>=MOVE_MS){ lastMove=now; send({t:"move",x:p.x,y:p.y}); return; }
+    movePending=p;
+    if(!moveTimer){ moveTimer=setTimeout(function(){ moveTimer=null; if(movePending){ var q=movePending; movePending=null; lastMove=Date.now(); send({t:"move",x:q.x,y:q.y}); } }, MOVE_MS-(now-lastMove)); }
+  }
+  canvas.addEventListener("mousemove",function(e){ sendMove(norm(e)); });
   canvas.addEventListener("mousedown",function(e){e.preventDefault();var p=norm(e);send({t:"down",x:p.x,y:p.y,button:btn[e.button]||"left"});canvas.focus();openKeyboard();});
   canvas.addEventListener("mouseup",function(e){var p=norm(e);send({t:"up",x:p.x,y:p.y,button:btn[e.button]||"left"});});
   canvas.addEventListener("contextmenu",function(e){e.preventDefault();});
@@ -123,7 +132,7 @@
 
   // Touch: one finger is the mouse. A tap clicks and opens the keyboard; a drag moves or scrolls the page.
   canvas.addEventListener("touchstart",function(e){e.preventDefault();var p=norm(e.touches[0]);send({t:"move",x:p.x,y:p.y});send({t:"down",x:p.x,y:p.y,button:"left"});},{passive:false});
-  canvas.addEventListener("touchmove",function(e){e.preventDefault();var p=norm(e.touches[0]);send({t:"move",x:p.x,y:p.y});},{passive:false});
+  canvas.addEventListener("touchmove",function(e){e.preventDefault();sendMove(norm(e.touches[0]));},{passive:false});
   canvas.addEventListener("touchend",function(e){e.preventDefault();var p=norm(e.changedTouches[0]);send({t:"up",x:p.x,y:p.y,button:"left"});openKeyboard();},{passive:false});
 
   // Keys with their modifiers, so Ctrl+A, Shift+arrows and friends reach the page as the person pressed them.

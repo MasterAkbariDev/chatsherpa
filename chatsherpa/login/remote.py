@@ -67,6 +67,9 @@ class LiveStreamer:
         self._meta = {"w": 1280, "h": 720}
         self._stopped = False
         self._tasks: set = set()
+        # Mouse moves are coalesced: only the latest position is sent, so clicks are not queued behind moves.
+        self._pending_move = None
+        self._move_task = None
 
     async def start(self) -> None:
         self._context.on("page", self._on_new_page)
@@ -129,6 +132,25 @@ class LiveStreamer:
     def _to_px(self, nx: float, ny: float):
         return nx * self._meta["w"], ny * self._meta["h"]
 
+    def _queue_move(self, x: float, y: float) -> None:
+        """Keep the newest pointer position and send it; older positions in the meantime are dropped."""
+        self._pending_move = (x, y)
+        if self._move_task is None or self._move_task.done():
+            self._move_task = asyncio.ensure_future(self._drain_moves())
+            self._tasks.add(self._move_task)
+            self._move_task.add_done_callback(self._tasks.discard)
+
+    async def _drain_moves(self) -> None:
+        while self._pending_move is not None and self._cdp and not self._stopped:
+            x, y = self._pending_move
+            self._pending_move = None
+            px, py = self._to_px(x, y)
+            try:
+                await self._cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": px, "y": py})
+            except Exception as exc:  # noqa: BLE001 - a failed move must not stop the next input
+                log.debug("move failed: %s", exc)
+                return
+
     async def _key(self, msg: Dict[str, Any]) -> None:
         """A key press. Edit keys and Ctrl/Cmd shortcuts carry the editing command Chromium acts on."""
         key = msg.get("key", "")
@@ -169,9 +191,12 @@ class LiveStreamer:
             return
         t = msg.get("t")
         try:
-            if t in ("move", "down", "up"):
+            if t == "move":
+                self._queue_move(msg["x"], msg["y"])
+                return
+            if t in ("down", "up"):
                 x, y = self._to_px(msg["x"], msg["y"])
-                etype = {"move": "mouseMoved", "down": "mousePressed", "up": "mouseReleased"}[t]
+                etype = {"down": "mousePressed", "up": "mouseReleased"}[t]
                 payload = {"type": etype, "x": x, "y": y}
                 if t != "move":
                     payload.update({"button": msg.get("button", "left"), "clickCount": 1})
