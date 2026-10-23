@@ -54,3 +54,29 @@ async def test_a_requested_picture_is_captured_even_when_it_appears_after_the_te
 async def test_a_reply_without_a_requested_picture_does_not_wait_for_one():
     html = '<div class="reply"><p>Two plus two is four.</p></div>'
     assert await _capture(html, expect_picture=False) == []
+
+
+async def test_a_picture_that_loads_only_when_it_is_on_screen_is_captured():
+    # The picture is far below the fold, and loads only when it is scrolled into view (lazy loading), as Gemini's do.
+    html = f"""
+    <div style="height: 4000px"></div>
+    <div class="reply"><img loading="lazy" alt="cat" width="200" height="200" src="data:image/png;base64,{PNG_1x1}"></div>"""
+    found = await _capture(html, expect_picture=False)
+    assert [m["mime"] for m in found] == ["image/png"]
+
+
+async def test_a_picture_whose_link_was_released_by_the_page_is_still_captured():
+    # The page draws the picture from a blob link and then releases the link, as Gemini's page does: the picture can
+    # still be read from what the page shows.
+    html = f"""
+    <div class="reply"><img id="cat" alt="cat" width="200" height="200"></div>
+    <script>
+      const bytes = Uint8Array.from(atob('{PNG_1x1}'), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], {{type: 'image/png'}}));
+      const img = document.getElementById('cat');
+      img.onload = () => URL.revokeObjectURL(url);
+      img.src = url;
+    </script>"""
+    found = await _capture(html, expect_picture=False)
+    assert [m["mime"] for m in found] == ["image/png"]
+    assert base64.b64decode(found[0]["data"])[:4] == b"\x89PNG"

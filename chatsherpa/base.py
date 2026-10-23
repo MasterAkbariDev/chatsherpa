@@ -751,8 +751,29 @@ class BaseProvider:
         r.onerror = () => reject(r.error);
         r.readAsDataURL(blob);
       });
+      // A picture the page has drawn is read from the page itself: its link (a blob the page may have released) can be
+      // gone by now. A canvas of it is exact; a cross-origin picture cannot be read this way and is fetched instead.
+      const fromPage = (img) => {
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        c.getContext('2d').drawImage(img, 0, 0);
+        for (const type of ['image/png', 'image/jpeg']) {
+          const data = (c.toDataURL(type, 0.92).split(',')[1] || '');
+          if (data && Math.floor((data.length * 3) / 4) <= limits.bytes) return { mime: type, data };
+        }
+        return null;
+      };
       for (const img of imgs) {
         if (out.length >= limits.count) break;
+        if (img.naturalWidth > 0) {
+          try {
+            const picture = fromPage(img);
+            if (picture) { out.push({ mime: picture.mime, data: picture.data, alt: img.alt || '' }); continue; }
+          } catch (e) {
+            // Not readable from the page (cross-origin): fetched below.
+          }
+        }
         const src = img.currentSrc || img.src;
         if (!src) continue;
         try {
@@ -856,14 +877,18 @@ class BaseProvider:
             wait_s = self.IMAGE_APPEAR_WAIT_S if expect_picture else self.MEDIA_WAIT_S
             deadline = time.monotonic() + wait_s
             while True:
+                # Pictures are often loaded only once they reach the screen, so each one is brought into view first.
+                await handle.evaluate("el => el.querySelectorAll('img').forEach(i => i.scrollIntoView({block: 'center'}))")
                 found = await self.page.evaluate(
                     self._MEDIA_JS,
                     {"el": handle, "count": self.MEDIA_MAX_COUNT, "bytes": self.MEDIA_MAX_BYTES},
                 )
                 if found or time.monotonic() >= deadline:
                     return list(found or [])
+                # Still loading: a picture on the page that has no data yet (not decoded, or not started).
                 loading = await handle.evaluate(
-                    "el => [...el.querySelectorAll('img')].filter(i => i.src && !i.complete).length"
+                    "el => [...el.querySelectorAll('img')]"
+                    ".filter(i => Math.max(i.width, i.naturalWidth) >= 96 && i.naturalWidth === 0).length"
                 )
                 if not loading and not expect_picture:
                     return []
@@ -1065,7 +1090,7 @@ class BaseProvider:
                 return False
             handle = await loc.element_handle()
             return bool(await handle.evaluate(
-                "el => [...el.querySelectorAll('img')].some(i => i.complete && i.width >= 96 && i.height >= 96)"))
+                "el => [...el.querySelectorAll('img')].some(i => i.naturalWidth > 0 && i.width >= 96 && i.height >= 96)"))
         except Exception:  # noqa: BLE001 - a page that cannot be read has no picture
             return False
 
