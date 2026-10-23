@@ -38,7 +38,8 @@ log = logging.getLogger("chatsherpa")
 
 _MORE_MODELS = re.compile(r"more models|see all models|show all", re.I)
 _SKIP_MODEL = re.compile(
-    r"^(upgrade|get plus|get pro|see plans|learn more|settings|help|sign out|log out|new chat|temporary chat)$",
+    r"^(premium|supergrok|upgrade\b.*|get\s.*|see\s.*|learn\s.*|try\s.*|subscribe.*|buy\s.*"
+    r"|sign\s?(in|up).*|log\s?(in|out).*|settings|help|new chat|temporary chat|plans?|pricing)$",
     re.I,
 )
 

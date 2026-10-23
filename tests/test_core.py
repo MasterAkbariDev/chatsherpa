@@ -18,6 +18,14 @@ from chatsherpa.providers import ChatGPTProvider
 STATE = {"cookies": [{"name": "s", "value": "1", "domain": "chatgpt.com", "path": "/"}], "origins": []}
 
 
+def test_upgrade_and_account_labels_are_not_models():
+    from chatsherpa.base import clean_model_labels
+    # Grok's menu shows an upgrade button named "Premium"; it is not a model.
+    assert clean_model_labels(["Fast", "Premium", "SuperGrok", "Upgrade to SuperGrok", "Get Plus",
+                               "Sign in", "Expert", "Heavy", "3.1 Pro", "Pro"]) == [
+        "Fast", "Expert", "Heavy", "3.1 Pro", "Pro"]
+
+
 def test_model_labels_come_from_the_page():
     from chatsherpa.base import clean_model_labels
     from chatsherpa.providers import ChatGPTProvider, DeepSeekProvider, GeminiProvider, GrokProvider
