@@ -16,6 +16,7 @@ import logging
 import time
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from aiohttp import WSMsgType, web
 from playwright.async_api import async_playwright
@@ -139,6 +140,44 @@ class LoginServer:
         await self.bus.emit(Event(EventType.LOGIN_STARTED, provider=provider_cls.name,
                                   user_id=user_id, data={"mode": "connect"}))
         return {"token": pending.token, "url": pending.handle.url, "expires_in": self.ttl}
+
+    async def _manual_check(self, pending, send_json) -> None:
+        """The person asks the live page to check now. The page is checked as it is first; if that fails and
+        the page is off the provider's site (a Google account page after sign-in, say), it goes to the
+        provider's own address and is checked again. A pass completes the login."""
+        if pending.checking:
+            return
+        pending.checking = True
+        provider_cls = pending.provider_cls
+        try:
+            page = pending.page
+            prov = provider_cls.attach(page, self.config)
+            signed_in = await self._probe(prov)
+            if not signed_in and urlparse(page.url).hostname != urlparse(provider_cls.home_url).hostname:
+                await page.goto(provider_cls.home_url, wait_until="domcontentloaded", timeout=30000)
+                signed_in = await self._probe(prov)
+            if signed_in:
+                state = await pending.context.storage_state()
+                await self.store.put(pending.user_id, provider_cls.name, state)
+                self.broker.resolve(pending.token, state)
+                await self.bus.emit(Event(EventType.LOGIN_SUCCEEDED, provider=provider_cls.name,
+                                          user_id=pending.user_id))
+                return
+            await send_json({"type": "check", "ok": False,
+                             "message": "Not signed in yet. Finish signing in, then press Check again."})
+        except Exception as exc:  # noqa: BLE001 - a check that cannot run says so on the page
+            log.warning("manual check for %s could not run: %s", provider_cls.name, exc)
+            await send_json({"type": "check", "ok": False,
+                             "message": "The check could not run. Press Check again."})
+        finally:
+            pending.checking = False
+
+    @staticmethod
+    async def _probe(prov) -> bool:
+        try:
+            return bool(await asyncio.wait_for(prov.is_logged_in(), 30))
+        except asyncio.TimeoutError:
+            return False
 
     async def _catch(self, pending):
         provider_cls = pending.provider_cls
@@ -522,7 +561,11 @@ class LoginServer:
             async for msg in ws:
                 if msg.type == WSMsgType.TEXT:
                     try:
-                        await streamer.dispatch(json.loads(msg.data))
+                        data = json.loads(msg.data)
+                        if data.get("t") == "check":
+                            asyncio.ensure_future(self._manual_check(pending, send_json))
+                        else:
+                            await streamer.dispatch(data)
                     except Exception:
                         pass
                 elif msg.type == WSMsgType.ERROR:

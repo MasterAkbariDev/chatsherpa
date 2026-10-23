@@ -29,6 +29,9 @@
   .kbtn{margin-left:auto;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--line);border:0;border-radius:999px;padding:6px 12px;cursor:pointer}
   .kbtn:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
   header .status{margin-left:0}
+  #chk{margin-left:auto;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--line);border:0;border-radius:999px;padding:6px 12px;cursor:pointer}
+  #chk:disabled{opacity:.6;cursor:default}
+  #kbtn{margin-left:0}
   /* Off-screen field that the phone keyboard attaches to. 16px stops iOS zooming in. */
   /* Controls for the page: navigation and the keys a phone or a mouse user needs. */
   .bar{display:flex;gap:6px;padding:8px 10px;overflow-x:auto;border-bottom:1px solid var(--line);background:var(--panel);-webkit-overflow-scrolling:touch}
@@ -52,6 +55,7 @@
     <span class="dot" id="livedot"></span>
     <span class="t">Secure login <small id="sub">connecting to __PROVIDER__…</small></span>
     <span class="status" id="status">●</span>
+    <button type="button" class="kbtn" id="chk" title="Check now whether this page is signed in">Check sign-in</button>
     <button type="button" class="kbtn" id="kbtn">Keyboard</button>
   </header>
   <div class="bar" id="bar" role="toolbar" aria-label="Browser controls">
@@ -113,7 +117,23 @@
       else if(m.type==="focus"){ setEditable(!!m.editable); }
       else if(m.type==="success"){ finish(true); }
       else if(m.type==="failed"||m.type==="error"){ finish(false,m.message); }
+      else if(m.type==="check"){ checkDone(m.message); }
     };
+  }
+  // "Check sign-in" asks the server to run the provider's own sign-in test on this page. A pass finishes the
+  // login (the success message follows). A fail leaves the page as it is and says why, for a few seconds.
+  var chk=document.getElementById("chk"), chkTimer=null;
+  chk.addEventListener("click",function(){
+    if(done||chk.disabled) return;
+    chk.disabled=true; chk.textContent="Checking…";
+    send({t:"check"});
+  });
+  function checkDone(msg){
+    chk.disabled=false; chk.textContent="Check sign-in";
+    if(!msg) return;
+    sub.textContent=msg;
+    clearTimeout(chkTimer);
+    chkTimer=setTimeout(function(){ if(!done) sub.textContent="logging in to __PROVIDER__"; },8000);
   }
   function hideOverlay(){overlay.classList.remove("show");}
   function finish(ok,msg){

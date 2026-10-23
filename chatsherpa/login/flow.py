@@ -40,6 +40,8 @@ class PendingLogin:
     context: Any = None
     page: Any = None
     catcher: Any = None
+    # True while a person-requested sign-in check runs on the live page
+    checking: bool = False
 
     @property
     def expired(self) -> bool:
