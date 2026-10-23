@@ -39,7 +39,9 @@ log = logging.getLogger("chatsherpa")
 _MORE_MODELS = re.compile(r"more models|see all models|show all", re.I)
 _SKIP_MODEL = re.compile(
     r"^(premium|supergrok|upgrade\b.*|get\s.*|see\s.*|learn\s.*|try\s.*|subscribe.*|buy\s.*"
-    r"|sign\s?(in|up).*|log\s?(in|out).*|settings|help|new chat|temporary chat|plans?|pricing)$",
+    r"|sign\s?(in|up).*|log\s?(in|out).*|settings|help|new chat|temporary chat|plans?|pricing"
+    # Thinking levels (Gemini's Low / Medium / High dropdown) are a setting, not a model.
+    r"|low|medium|high)$",
     re.I,
 )
 

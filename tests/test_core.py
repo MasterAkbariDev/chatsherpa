@@ -394,3 +394,10 @@ def test_clean_model_label():
     assert clean_model_label("Open mode selector, currently 2.5 Flash") == "2.5 Flash"
     assert clean_model_label("") is None
     assert clean_model_label("   ") is None
+
+
+def test_gemini_thinking_levels_are_not_models():
+    from chatsherpa.base import clean_model_labels
+    # Gemini's Low / Medium / High dropdown is a thinking setting; the model list keeps "Thinking" (a Grok model).
+    assert clean_model_labels(["2.5 Pro", "2.5 Flash", "Low", "Medium", "High", "Thinking"]) == [
+        "2.5 Pro", "2.5 Flash", "Thinking"]
