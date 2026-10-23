@@ -7,6 +7,7 @@ import time
 from urllib.parse import urlparse
 
 from ..base import BaseProvider
+from ..exceptions import BotChallengeError, LoginRequiredError
 
 
 class ChatGPTProvider(BaseProvider):
@@ -164,6 +165,27 @@ class ChatGPTProvider(BaseProvider):
             return await self.page.locator(selector).first.is_visible()
         except Exception:
             return False
+
+    async def _session_api_status(self) -> int:
+        """HTTP status of ChatGPT's session endpoint from this browser (0 if it can't ask)."""
+        try:
+            return int(await self.page.evaluate(
+                "async () => (await fetch('/api/auth/session', {credentials: 'include'})).status"))
+        except Exception:
+            return 0
+
+    async def ensure_logged_in(self) -> None:
+        try:
+            await super().ensure_logged_in()
+        except LoginRequiredError:
+            # A 403 from the session endpoint means Cloudflare is refusing this browser or IP
+            # (often after too many automated requests). The login itself may be fine.
+            if await self._session_api_status() == 403:
+                raise BotChallengeError(
+                    f"[{self.name}] ChatGPT refuses this browser's session check (403, Cloudflare). "
+                    "Wait before retrying, or use another IP; the saved login is not necessarily invalid."
+                ) from None
+            raise
 
     async def is_logged_in(self) -> bool:
         """Signed in when the session API returns a user, or the app shell is up.

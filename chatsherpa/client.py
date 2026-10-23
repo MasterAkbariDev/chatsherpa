@@ -104,6 +104,15 @@ class ChatSherpa:
             await self._error(provider_cls.name, uid, ErrorType.LOGIN_REQUIRED, str(exc))
             raise
         except ResponseTimeoutError as exc:
+            if thread is not None and "no new assistant message" in str(exc):
+                # A saved chat that never answers is stuck (its last message got no reply).
+                # Say so, so the caller starts a new chat instead of retrying this one.
+                stuck = ChatFullError(
+                    f"[{provider_cls.name}] chat '{chat}' stopped answering: the last message got no reply. "
+                    "Start a new chat: pass a new --chat name, or --new to reset this one."
+                )
+                await self._error(provider_cls.name, uid, ErrorType.CHAT_FULL, str(stuck))
+                raise stuck from exc
             await self._error(provider_cls.name, uid, ErrorType.RESPONSE_TIMEOUT, str(exc))
             raise
         except BotChallengeError as exc:

@@ -751,7 +751,13 @@ class BaseProvider:
 
     async def _fill_input(self, text: str) -> None:
         el = self.page.locator(self.input_selector).last
-        await el.click()
+        try:
+            await el.click(timeout=15_000)
+        except PWTimeoutError:
+            # Something sits on top of the composer. A full chat shows its banner there,
+            # so report that; otherwise focus the composer directly (focus ignores overlays).
+            await self._raise_if_chat_full()
+            await el.focus()
         if self.input_is_contenteditable:
             # fill() doesn't work on rich contenteditable (ProseMirror/Quill).
             await self.page.keyboard.insert_text(text)
