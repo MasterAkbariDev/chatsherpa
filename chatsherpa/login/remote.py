@@ -19,22 +19,37 @@ _SPECIAL_KEYS = {
     "Enter": ("Enter", 13), "Backspace": ("Backspace", 8), "Tab": ("Tab", 9),
     "Escape": ("Escape", 27), "ArrowLeft": ("ArrowLeft", 37), "ArrowUp": ("ArrowUp", 38),
     "ArrowRight": ("ArrowRight", 39), "ArrowDown": ("ArrowDown", 40), "Delete": ("Delete", 46),
-    "Home": ("Home", 36), "End": ("End", 35),
+    "Home": ("Home", 36), "End": ("End", 35), "PageUp": ("PageUp", 33), "PageDown": ("PageDown", 34),
 }
 # The editing command a key means in a text field. Chromium needs it with the key, or the key does nothing.
 _EDIT_COMMANDS = {
-    "Backspace": ["deleteBackward"], "Delete": ["deleteForward"], "Enter": ["insertNewline"],
-    "ArrowLeft": ["moveLeft"], "ArrowRight": ["moveRight"], "ArrowUp": ["moveUp"], "ArrowDown": ["moveDown"],
-    "Home": ["moveToBeginningOfLine"], "End": ["moveToEndOfLine"],
+    "Backspace": "deleteBackward", "Delete": "deleteForward", "Enter": "insertNewline",
+    "ArrowLeft": "moveLeft", "ArrowRight": "moveRight", "ArrowUp": "moveUp", "ArrowDown": "moveDown",
+    "Home": "moveToBeginningOfLine", "End": "moveToEndOfLine",
+    "PageUp": "scrollPageBackward", "PageDown": "scrollPageForward",
 }
-# Shift extends the selection with the same movement.
-_SELECT_COMMANDS = {
-    "ArrowLeft": "moveLeftAndModifySelection", "ArrowRight": "moveRightAndModifySelection",
-    "ArrowUp": "moveUpAndModifySelection", "ArrowDown": "moveDownAndModifySelection",
-    "Home": "moveToBeginningOfLineAndModifySelection", "End": "moveToEndOfLineAndModifySelection",
-}
-# Ctrl/Cmd shortcuts for text: the letter -> the command.
+# Ctrl/Alt with these works by word, and Ctrl with Home/End by document.
+_WORD_COMMANDS = {"Backspace": "deleteWordBackward", "Delete": "deleteWordForward",
+                  "ArrowLeft": "moveWordLeft", "ArrowRight": "moveWordRight"}
+_DOC_COMMANDS = {"Home": "moveToBeginningOfDocument", "End": "moveToEndOfDocument"}
+# Shift extends the selection with the same movement (Chromium's "...AndModifySelection" commands).
+_SELECTABLE = {"ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"}
+# Ctrl/Cmd shortcuts for text: the letter -> the command. Ctrl+Shift+Z is redo.
 _SHORTCUT_COMMANDS = {"a": "selectAll", "c": "copy", "v": "paste", "x": "cut", "z": "undo", "y": "redo"}
+
+
+def _special_commands(key: str, msg: Dict[str, Any]) -> list:
+    """The editing command for a special key, given its modifiers (Ctrl or Alt for word, Shift to select)."""
+    name = _EDIT_COMMANDS.get(key)
+    if key in _DOC_COMMANDS and msg.get("ctrl"):
+        name = _DOC_COMMANDS[key]
+    elif key in _WORD_COMMANDS and (msg.get("ctrl") or msg.get("alt")):
+        name = _WORD_COMMANDS[key]
+    if name is None:
+        return []
+    if msg.get("shift") and key in _SELECTABLE:
+        name = name + "AndModifySelection"
+    return [name]
 # Chromium modifier bits: Alt 1, Ctrl 2, Meta 4, Shift 8.
 def _modifiers(msg: Dict[str, Any]) -> int:
     return (1 if msg.get("alt") else 0) | (2 if msg.get("ctrl") else 0) | (4 if msg.get("meta") else 0) | (8 if msg.get("shift") else 0)
@@ -120,13 +135,14 @@ class LiveStreamer:
         mods = _modifiers(msg)
         if key in _SPECIAL_KEYS:
             kname, vk = _SPECIAL_KEYS[key]
-            commands = list(_EDIT_COMMANDS.get(key, []))
-            if msg.get("shift") and key in _SELECT_COMMANDS:
-                commands = [_SELECT_COMMANDS[key]]
+            commands = _special_commands(key, msg)
             payload = {"key": kname, "code": kname, "windowsVirtualKeyCode": vk, "modifiers": mods}
         elif (msg.get("ctrl") or msg.get("meta")) and len(key) == 1:
             letter = key.lower()
-            commands = [_SHORTCUT_COMMANDS[letter]] if letter in _SHORTCUT_COMMANDS else []
+            command = _SHORTCUT_COMMANDS.get(letter)
+            if letter == "z" and msg.get("shift"):
+                command = "redo"
+            commands = [command] if command else []
             vk = ord(letter.upper())
             payload = {"key": letter, "code": f"Key{letter.upper()}", "windowsVirtualKeyCode": vk, "modifiers": mods}
         else:

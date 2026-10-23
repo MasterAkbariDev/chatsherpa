@@ -152,6 +152,7 @@
   kb.addEventListener("compositionend",function(){ sync(); });
   kb.addEventListener("keydown",function(e){
     if(e.isComposing||done) return;
+    if(isPasteKey(e)) return;   // the paste event brings in the text on this device
     if((e.ctrlKey||e.metaKey) && e.key.length===1){
       // A shortcut is the page's, not the text field's: send it and start the field afresh.
       e.preventDefault(); send(withMods({t:"key",key:e.key},e)); resetKb(); return;
@@ -165,6 +166,12 @@
     b.addEventListener("pointerdown",function(e){ e.preventDefault(); });
     b.addEventListener("click",function(){
       if(b.dataset.nav){ send({t:"nav",action:b.dataset.nav}); return; }
+      if(b.dataset.key==="v" && b.dataset.ctrl && navigator.clipboard && navigator.clipboard.readText){
+        // The toolbar's Paste reads this device's clipboard; the remote clipboard is only a fallback.
+        navigator.clipboard.readText().then(pasteText, function(){ send({t:"key",key:"v",ctrl:true}); });
+        kb.focus({preventScroll:true});
+        return;
+      }
       send({t:"key",key:b.dataset.key,ctrl:!!b.dataset.ctrl,shift:false,alt:false,meta:false});
       resetKb();
       kb.focus({preventScroll:true});
@@ -173,8 +180,20 @@
   document.getElementById("kbtn").addEventListener("click",openKeyboard);
   resetKb();
 
+  // Paste brings in the text on this device, so the browser's paste event does it (see "paste" below).
+  function isPasteKey(e){ return (e.ctrlKey||e.metaKey) && (e.key==="v"||e.key==="V"); }
+
+  // A paste from this device goes into the remote page as text.
+  function pasteText(text){ if(text && !done) send({t:"char",text:text}); }
+  document.addEventListener("paste",function(e){
+    var data=(e.clipboardData||window.clipboardData);
+    var text=data ? data.getData("text") : "";
+    if(text){ e.preventDefault(); pasteText(text); }
+  });
+
   window.addEventListener("keydown",function(e){
     if(done || e.target===kb) return;
+    if(isPasteKey(e)) return;
     if(e.key.length===1 && !e.ctrlKey && !e.metaKey){ send({t:"char",text:e.key}); e.preventDefault(); }
     else { send(withMods({t:"key",key:e.key},e)); if(e.ctrlKey||e.metaKey||["Tab","Enter","Backspace","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].indexOf(e.key)>=0) e.preventDefault(); }
   });

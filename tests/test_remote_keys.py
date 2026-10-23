@@ -40,3 +40,37 @@ async def test_shift_arrow_extends_the_selection():
     await s.dispatch({"t": "key", "key": "ArrowLeft", "shift": True})
     assert s._cdp.calls[0][1]["commands"] == ["moveLeftAndModifySelection"]
     assert s._cdp.calls[0][1]["modifiers"] == 8
+
+
+async def test_ctrl_backspace_deletes_a_word():
+    s = _streamer()
+    await s.dispatch({"t": "key", "key": "Backspace", "ctrl": True})
+    assert s._cdp.calls[0][1]["commands"] == ["deleteWordBackward"]
+
+
+async def test_ctrl_shift_arrow_extends_by_word():
+    s = _streamer()
+    await s.dispatch({"t": "key", "key": "ArrowRight", "ctrl": True, "shift": True})
+    assert s._cdp.calls[0][1]["commands"] == ["moveWordRightAndModifySelection"]
+
+
+async def test_ctrl_home_goes_to_the_start_of_the_document():
+    s = _streamer()
+    await s.dispatch({"t": "key", "key": "Home", "ctrl": True})
+    assert s._cdp.calls[0][1]["commands"] == ["moveToBeginningOfDocument"]
+
+
+async def test_page_keys_scroll_and_ctrl_shift_z_redoes():
+    s = _streamer()
+    await s.dispatch({"t": "key", "key": "PageDown"})
+    await s.dispatch({"t": "key", "key": "z", "ctrl": True, "shift": True})
+    assert s._cdp.calls[0][1]["commands"] == ["scrollPageForward"]
+    assert s._cdp.calls[2][1]["commands"] == ["redo"]
+
+
+async def test_copy_and_paste_use_the_remote_clipboard_commands():
+    s = _streamer()
+    await s.dispatch({"t": "key", "key": "c", "ctrl": True})
+    await s.dispatch({"t": "key", "key": "v", "ctrl": True})
+    assert s._cdp.calls[0][1]["commands"] == ["copy"]
+    assert s._cdp.calls[2][1]["commands"] == ["paste"]
