@@ -21,6 +21,23 @@ _SPECIAL_KEYS = {
     "ArrowRight": ("ArrowRight", 39), "ArrowDown": ("ArrowDown", 40), "Delete": ("Delete", 46),
     "Home": ("Home", 36), "End": ("End", 35),
 }
+# The editing command a key means in a text field. Chromium needs it with the key, or the key does nothing.
+_EDIT_COMMANDS = {
+    "Backspace": ["deleteBackward"], "Delete": ["deleteForward"], "Enter": ["insertNewline"],
+    "ArrowLeft": ["moveLeft"], "ArrowRight": ["moveRight"], "ArrowUp": ["moveUp"], "ArrowDown": ["moveDown"],
+    "Home": ["moveToBeginningOfLine"], "End": ["moveToEndOfLine"],
+}
+# Shift extends the selection with the same movement.
+_SELECT_COMMANDS = {
+    "ArrowLeft": "moveLeftAndModifySelection", "ArrowRight": "moveRightAndModifySelection",
+    "ArrowUp": "moveUpAndModifySelection", "ArrowDown": "moveDownAndModifySelection",
+    "Home": "moveToBeginningOfLineAndModifySelection", "End": "moveToEndOfLineAndModifySelection",
+}
+# Ctrl/Cmd shortcuts for text: the letter -> the command.
+_SHORTCUT_COMMANDS = {"a": "selectAll", "c": "copy", "v": "paste", "x": "cut", "z": "undo", "y": "redo"}
+# Chromium modifier bits: Alt 1, Ctrl 2, Meta 4, Shift 8.
+def _modifiers(msg: Dict[str, Any]) -> int:
+    return (1 if msg.get("alt") else 0) | (2 if msg.get("ctrl") else 0) | (4 if msg.get("meta") else 0) | (8 if msg.get("shift") else 0)
 
 
 class LiveStreamer:
@@ -97,6 +114,40 @@ class LiveStreamer:
     def _to_px(self, nx: float, ny: float):
         return nx * self._meta["w"], ny * self._meta["h"]
 
+    async def _key(self, msg: Dict[str, Any]) -> None:
+        """A key press. Edit keys and Ctrl/Cmd shortcuts carry the editing command Chromium acts on."""
+        key = msg.get("key", "")
+        mods = _modifiers(msg)
+        if key in _SPECIAL_KEYS:
+            kname, vk = _SPECIAL_KEYS[key]
+            commands = list(_EDIT_COMMANDS.get(key, []))
+            if msg.get("shift") and key in _SELECT_COMMANDS:
+                commands = [_SELECT_COMMANDS[key]]
+            payload = {"key": kname, "code": kname, "windowsVirtualKeyCode": vk, "modifiers": mods}
+        elif (msg.get("ctrl") or msg.get("meta")) and len(key) == 1:
+            letter = key.lower()
+            commands = [_SHORTCUT_COMMANDS[letter]] if letter in _SHORTCUT_COMMANDS else []
+            vk = ord(letter.upper())
+            payload = {"key": letter, "code": f"Key{letter.upper()}", "windowsVirtualKeyCode": vk, "modifiers": mods}
+        else:
+            return
+        # rawKeyDown is the key itself; the command (when there is one) is what the page acts on.
+        down = {"type": "rawKeyDown", **payload}
+        if commands:
+            down["commands"] = commands
+        await self._cdp.send("Input.dispatchKeyEvent", down)
+        await self._cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", **payload})
+
+    async def _nav(self, action: str) -> None:
+        """Back, forward and reload, in the page the person is looking at."""
+        page = self._page
+        if action == "back":
+            await page.go_back(wait_until="domcontentloaded")
+        elif action == "forward":
+            await page.go_forward(wait_until="domcontentloaded")
+        elif action == "reload":
+            await page.reload(wait_until="domcontentloaded")
+
     async def dispatch(self, msg: Dict[str, Any]) -> None:
         if not self._cdp or self._stopped:
             return
@@ -117,12 +168,8 @@ class LiveStreamer:
             elif t == "char":
                 await self._cdp.send("Input.insertText", {"text": msg["text"]})
             elif t == "key":
-                key = msg.get("key", "")
-                if key in _SPECIAL_KEYS:
-                    kname, vk = _SPECIAL_KEYS[key]
-                    for etype in ("keyDown", "keyUp"):
-                        await self._cdp.send("Input.dispatchKeyEvent", {
-                            "type": etype, "key": kname, "code": kname,
-                            "windowsVirtualKeyCode": vk})
+                await self._key(msg)
+            elif t == "nav":
+                await self._nav(msg.get("action", ""))
         except Exception as exc:
             log.debug("input dispatch failed: %s", exc)

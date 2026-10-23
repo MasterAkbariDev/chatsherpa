@@ -31,6 +31,12 @@
   .kbtn:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
   header .status{margin-left:0}
   /* Off-screen field that the phone keyboard attaches to. 16px stops iOS zooming in. */
+  /* Controls for the page: navigation and the keys a phone or a mouse user needs. */
+  .bar{display:flex;gap:6px;padding:8px 10px;overflow-x:auto;border-bottom:1px solid var(--line);background:var(--panel);-webkit-overflow-scrolling:touch}
+  .bar button{flex:none;font:inherit;font-size:12.5px;color:var(--ink);background:var(--line);border:0;border-radius:999px;padding:6px 11px;cursor:pointer;white-space:nowrap}
+  .bar button:hover{background:#343b48}
+  .bar button:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+  .bar .sep{flex:none;width:1px;background:var(--line);margin:4px 2px}
   #kb{position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;border:0;padding:0;margin:0;font-size:16px;pointer-events:none}
 </style>
 </head>
@@ -41,6 +47,30 @@
     <span class="status" id="status">●</span>
     <button type="button" class="kbtn" id="kbtn">Keyboard</button>
   </header>
+  <div class="bar" id="bar" role="toolbar" aria-label="Browser controls">
+    <button type="button" data-nav="back" title="Back">&larr; Back</button>
+    <button type="button" data-nav="forward" title="Forward">Forward &rarr;</button>
+    <button type="button" data-nav="reload" title="Reload">Reload</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" data-key="a" data-ctrl="1" title="Select all (Ctrl+A)">Select all</button>
+    <button type="button" data-key="c" data-ctrl="1" title="Copy">Copy</button>
+    <button type="button" data-key="x" data-ctrl="1" title="Cut">Cut</button>
+    <button type="button" data-key="v" data-ctrl="1" title="Paste">Paste</button>
+    <button type="button" data-key="z" data-ctrl="1" title="Undo">Undo</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" data-key="Backspace" title="Delete the character before the cursor">Backspace</button>
+    <button type="button" data-key="Delete" title="Delete the character after the cursor">Delete</button>
+    <button type="button" data-key="Enter" title="Enter">Enter</button>
+    <button type="button" data-key="Tab" title="Tab">Tab</button>
+    <button type="button" data-key="Escape" title="Escape">Esc</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" data-key="ArrowLeft" title="Left">&larr;</button>
+    <button type="button" data-key="ArrowUp" title="Up">&uarr;</button>
+    <button type="button" data-key="ArrowDown" title="Down">&darr;</button>
+    <button type="button" data-key="ArrowRight" title="Right">&rarr;</button>
+    <button type="button" data-key="Home" title="Start of line">Home</button>
+    <button type="button" data-key="End" title="End of line">End</button>
+  </div>
   <div class="stage" id="stage">
     <canvas id="screen" width="1280" height="800"></canvas>
     <div class="hint">One-time, encrypted session. Log in as you normally would — Google / 2FA all work.</div>
@@ -96,6 +126,9 @@
   canvas.addEventListener("touchmove",function(e){e.preventDefault();var p=norm(e.touches[0]);send({t:"move",x:p.x,y:p.y});},{passive:false});
   canvas.addEventListener("touchend",function(e){e.preventDefault();var p=norm(e.changedTouches[0]);send({t:"up",x:p.x,y:p.y,button:"left"});openKeyboard();},{passive:false});
 
+  // Keys with their modifiers, so Ctrl+A, Shift+arrows and friends reach the page as the person pressed them.
+  function withMods(o,e){ o.ctrl=!!(e.ctrlKey); o.meta=!!(e.metaKey); o.alt=!!(e.altKey); o.shift=!!(e.shiftKey); return o; }
+
   // Phone keyboards send text as input events, not keydown, so the text field below does the typing.
   // Keyboards often rewrite the word they are still building (autocomplete, autocorrect, suggestions),
   // so the field is not sent blindly: `mirror` is what the remote browser has received from this field,
@@ -105,21 +138,37 @@
   function resetKb(){ kb.value=SENT; mirror=""; try{kb.setSelectionRange(1,1);}catch(_){} }
   function openKeyboard(){ resetKb(); kb.focus({preventScroll:true}); }
   function sync(){
-    var text=kb.value.charAt(0)===SENT ? kb.value.slice(1) : kb.value;
-    var p=0; while(p<mirror.length && p<text.length && mirror.charAt(p)===text.charAt(p)) p++;
-    for(var i=p;i<mirror.length;i++){ send({t:"key",key:"Backspace"}); }
-    for(var j=p;j<text.length;j++){ var ch=text.charAt(j); if(ch==="\n") send({t:"key",key:"Enter"}); else send({t:"char",text:ch}); }
+    // Compare with what the field showed last time, sentinel included: deleting the sentinel is a Backspace too.
+    var prev=SENT+mirror, now=kb.value, p=0;
+    while(p<prev.length && p<now.length && prev.charAt(p)===now.charAt(p)) p++;
+    for(var i=p;i<prev.length;i++){ send({t:"key",key:"Backspace"}); }
+    for(var j=p;j<now.length;j++){ var ch=now.charAt(j); if(ch==="\n") send({t:"key",key:"Enter"}); else send({t:"char",text:ch}); }
+    var text=now.charAt(0)===SENT ? now.slice(1) : now;
+    if(now.charAt(0)!==SENT){ kb.value=SENT+text; try{kb.setSelectionRange(1,1);}catch(_){} }
     mirror=text;
-    if(text.length===0){ resetKb(); }
-    else if(text.length>200){ resetKb(); }
+    if(text.length>200){ resetKb(); }
   }
   kb.addEventListener("input",function(){ sync(); });
   kb.addEventListener("compositionend",function(){ sync(); });
   kb.addEventListener("keydown",function(e){
     if(e.isComposing||done) return;
-    if(e.key==="Enter"||e.key==="Tab"||e.key==="Escape"||e.key.indexOf("Arrow")===0){
-      e.preventDefault(); send({t:"key",key:e.key}); resetKb();
+    if((e.ctrlKey||e.metaKey) && e.key.length===1){
+      // A shortcut is the page's, not the text field's: send it and start the field afresh.
+      e.preventDefault(); send(withMods({t:"key",key:e.key},e)); resetKb(); return;
     }
+    if(e.key==="Enter"||e.key==="Tab"||e.key==="Escape"||e.key.indexOf("Arrow")===0||e.key==="Home"||e.key==="End"){
+      e.preventDefault(); send(withMods({t:"key",key:e.key},e)); resetKb();
+    }
+  });
+  // The toolbar: keep focus in the text field, so the phone keyboard stays open.
+  document.querySelectorAll("#bar button").forEach(function(b){
+    b.addEventListener("pointerdown",function(e){ e.preventDefault(); });
+    b.addEventListener("click",function(){
+      if(b.dataset.nav){ send({t:"nav",action:b.dataset.nav}); return; }
+      send({t:"key",key:b.dataset.key,ctrl:!!b.dataset.ctrl,shift:false,alt:false,meta:false});
+      resetKb();
+      kb.focus({preventScroll:true});
+    });
   });
   document.getElementById("kbtn").addEventListener("click",openKeyboard);
   resetKb();
@@ -127,7 +176,7 @@
   window.addEventListener("keydown",function(e){
     if(done || e.target===kb) return;
     if(e.key.length===1 && !e.ctrlKey && !e.metaKey){ send({t:"char",text:e.key}); e.preventDefault(); }
-    else { send({t:"key",key:e.key}); if(["Tab","Enter","Backspace","ArrowUp","ArrowDown"].indexOf(e.key)>=0)e.preventDefault(); }
+    else { send(withMods({t:"key",key:e.key},e)); if(e.ctrlKey||e.metaKey||["Tab","Enter","Backspace","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].indexOf(e.key)>=0) e.preventDefault(); }
   });
   connect();
 })();
