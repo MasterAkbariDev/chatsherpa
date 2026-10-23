@@ -67,11 +67,14 @@ class ChatSherpa:
                   model_order: Optional[list] = None,
                   new_chat: bool = False,
                   account: Optional[int] = None,
-                  on_model=None, on_media=None, chat: str = DEFAULT_CHAT) -> str:
+                  on_model=None, on_media=None, chat: str = DEFAULT_CHAT,
+                  on_text=None, on_status=None) -> str:
         """Send ``prompt`` into the user's named ``chat``.
 
         A chat that already exists is continued; a new name starts a fresh
         conversation and is saved under that name. ``new_chat`` resets it first.
+        ``on_text`` and ``on_status`` receive the reply while it is written (see
+        ``BaseProvider.send``); the returned text is the final answer.
         """
         provider_cls = get_provider(provider)
         uid = str(user_id)
@@ -97,7 +100,8 @@ class ChatSherpa:
         lease = await self.pool.lease(provider_cls, session, uid, start_url=thread)
         try:
             async with lease as prov:
-                text = await prov.send(prompt, model=model, model_order=model_order, on_model=on_model)
+                text = await prov.send(prompt, model=model, model_order=model_order, on_model=on_model,
+                                       on_text=on_text, on_status=on_status)
                 media = list(getattr(prov, "last_media", None) or [])
                 if on_media and media:
                     on_media(media)

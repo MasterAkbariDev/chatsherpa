@@ -217,6 +217,10 @@ class BaseProvider:
     assistant_message_selector: str = ""
     #: If set, presence of this selector means "generation in progress".
     streaming_indicator_selector: Optional[str] = None
+    #: If set, a visible match means the provider is searching the web for this reply
+    #: ("Searching the Web" in the status stream). None until a selector has been
+    #: observed on the live page; until then streaming reports "Working" only.
+    searching_selector: Optional[str] = None
     #: True when the provider overrides :meth:`_response_ready` with a reliable
     #: turn-finished signal. Such providers return on the signal (plus a short
     #: settle) and never end a reply on the bare stability window, so a
@@ -508,11 +512,18 @@ class BaseProvider:
     ]
 
     async def send(self, prompt: str, model: Optional[str] = None,
-                   model_order: Optional[List[str]] = None, on_model=None) -> str:
+                   model_order: Optional[List[str]] = None, on_model=None,
+                   on_text=None, on_status=None) -> str:
         """Type ``prompt``, submit, wait for the reply, return it as Markdown.
 
         ``model`` / ``model_order`` override the config for this call. ``on_model``
         is called once with the model name actually in use (for live status).
+
+        ``on_text(delta, replace=False)`` receives the reply while it is written: the
+        new Markdown since the last call, or the whole text with ``replace=True`` when
+        it changed other than by growing. ``on_status(label)`` receives the provider's
+        public state, "Working" or "Searching the Web", whenever it changes. Neither
+        ever sees the provider's reasoning. The return value is still the final answer.
         """
         await self.ensure_logged_in()
         try:
@@ -547,7 +558,7 @@ class BaseProvider:
             await self._fill_input(prompt)
             await self._submit()
             await self._wait_for_new_message(before)
-        text = await self._wait_for_stable_response()
+        text = await self._wait_for_stable_response(on_text=on_text, on_status=on_status)
         result = (await self._assistant_markdown()) or text
         self._raise_if_busy(result)
         self.last_media = await self._capture_media()
@@ -742,6 +753,9 @@ class BaseProvider:
         // Drop non-content chrome: code-block toolbars (Copy/Download), icons, etc.
         if (tag === 'button' || tag === 'svg' || tag === 'style' || tag === 'script') return '';
         if (node.getAttribute('role') === 'button' || node.getAttribute('aria-hidden') === 'true') return '';
+        // Drop a provider's reasoning ("thinking") blocks: they are never part of the answer.
+        // Only descendants are checked, so the reply's own root can never be dropped.
+        if (node !== el && /think|thought|reason/i.test(`${node.getAttribute('class') || ''} ${node.getAttribute('data-testid') || ''}`)) return '';
         const kids = () => Array.from(node.childNodes).map(walk).join('');
         switch (tag) {
           case 'br': return '\n';
@@ -791,8 +805,12 @@ class BaseProvider:
             log.debug("[%s] media capture skipped: %s", self.name, exc)
             return []
 
-    async def _assistant_markdown(self) -> str:
-        """The latest reply as Markdown (structure preserved). Falls back to text."""
+    async def _assistant_markdown(self, text_fallback: bool = True) -> str:
+        """The latest reply as Markdown (structure preserved). Falls back to text.
+
+        ``text_fallback=False`` returns "" instead of the turn's plain text, which can
+        hold reasoning. Streaming uses that, so only the Markdown answer is ever sent.
+        """
         try:
             loc = self.page.locator(self.assistant_message_selector).last
             if await loc.count():
@@ -802,7 +820,34 @@ class BaseProvider:
                     return md.strip()
         except Exception:
             pass
-        return await self._assistant_text()
+        return await self._assistant_text() if text_fallback else ""
+
+    async def _emit_text(self, sent: str, on_text) -> str:
+        """Hand the reply's new Markdown to ``on_text``; returns the text handed over so far."""
+        md = await self._assistant_markdown(text_fallback=False)
+        if not md or md == sent:
+            return sent
+        if md.startswith(sent):
+            on_text(md[len(sent):])
+        else:
+            on_text(md, replace=True)
+        return md
+
+    async def _status_label(self) -> Optional[str]:
+        """"Searching the Web" while the provider's search indicator is visible.
+
+        None means no special state is visible, and the caller reports "Working".
+        """
+        if not self.searching_selector:
+            return None
+        try:
+            loc = self.page.locator(self.searching_selector)
+            for i in range(min(await loc.count(), 4)):
+                if await loc.nth(i).is_visible():
+                    return "Searching the Web"
+        except Exception:
+            pass
+        return None
 
     async def _fill_input(self, text: str) -> None:
         el = self.page.locator(self.input_selector).last
@@ -945,8 +990,11 @@ class BaseProvider:
         """Provider hook: the latest turn has finished generating."""
         return False
 
-    async def _wait_for_stable_response(self) -> str:
+    async def _wait_for_stable_response(self, on_text=None, on_status=None) -> str:
         """Wait until the newest assistant turn is genuinely finished, then return it.
+
+        ``on_text`` and ``on_status`` (see :meth:`send`) get the reply's progress while
+        this waits. They do not change when the turn is judged finished.
 
         Two regimes, chosen by :attr:`has_ready_signal`:
 
@@ -967,7 +1015,14 @@ class BaseProvider:
         last_text = ""
         ready_since: Optional[float] = None   # done-signal held + text steady
         stable_since: Optional[float] = None  # text unchanged (window / fallback)
+        streamed = ""                         # Markdown already handed to on_text
+        status: Optional[str] = None          # last label handed to on_status
         while time.monotonic() < deadline:
+            if on_status is not None:
+                label = await self._status_label() or "Working"
+                if label != status:
+                    status = label
+                    on_status(label)
             try:
                 text = await self._assistant_text()
             except Exception:
@@ -977,6 +1032,8 @@ class BaseProvider:
                 # Any change in the reply resets every timer: still streaming.
                 last_text = text
                 ready_since = stable_since = None
+                if on_text is not None:
+                    streamed = await self._emit_text(streamed, on_text)
                 await asyncio.sleep(self.config.poll_interval_ms / 1000)
                 continue
 

@@ -98,7 +98,7 @@ class ChatGPTProvider(BaseProvider):
         return turn.querySelector('[class*="MarkdownRoot"], .markdown') || turn;
     }"""
 
-    async def _assistant_markdown(self) -> str:
+    async def _assistant_markdown(self, text_fallback: bool = True) -> str:
         try:
             handle = await self.page.evaluate_handle(self._TURN_EL_JS)
             md = await self.page.evaluate(self._MD_JS, handle)
@@ -111,7 +111,7 @@ class ChatGPTProvider(BaseProvider):
                     return md
         except Exception:
             pass
-        return await self._assistant_text()
+        return await self._assistant_text() if text_fallback else ""
 
     # Copy appears on a turn only after generation finishes. A hidden stop
     # button left in the DOM must not keep the CLI waiting.
