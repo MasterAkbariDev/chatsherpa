@@ -1,7 +1,7 @@
 # Usage
 
 Everything beyond the README: sessions, multiple accounts, the login server,
-Telegram bots, and deploying to a VPS.
+and deploying to a VPS.
 
 ## Sessions
 
@@ -63,29 +63,6 @@ Login link modes (chosen per provider by the bot):
 
 nginx: put the block from [../deploy/nginx-snippet.conf](../deploy/nginx-snippet.conf)
 above your catch-all `location /`, then `nginx -t && systemctl reload nginx`.
-
-## Telegram
-
-The library never owns a bot — you mount its handlers on your existing one.
-Users get `/ai <msg>`, `/ai_login`, `/ai_use`, `/ai_status`.
-
-```python
-from chatsherpa import ChatSherpa, FileSessionStore
-from chatsherpa.integrations import TelegramBridge
-
-bridge = ChatSherpa(store=FileSessionStore("sessions"))
-tg = TelegramBridge(bridge, command_prefix="ai",
-                    login_server_url=PUBLIC_BASE_URL, api_secret=API_SECRET,
-                    connect_providers=("gemini",))
-tg.register(application)            # python-telegram-bot
-# tg.register_aiogram(dispatcher)   # aiogram v3
-# reply = await tg.handle(user_id, text)   # any framework
-```
-
-Runnable examples: [telegram_fresh_ptb.py](../examples/telegram_fresh_ptb.py),
-[telegram_fresh_aiogram.py](../examples/telegram_fresh_aiogram.py),
-[telegram_existing.py](../examples/telegram_existing.py). The login server runs
-separately (`chatsherpa serve`); the bot talks to it over `/api/login`.
 
 ## Deploy to a VPS
 

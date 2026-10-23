@@ -6,8 +6,6 @@ a prompt, and returns the reply. You can use it three ways:
 
 1. **Command line** — `chatsherpa ask ...` from a terminal.
 2. **Python library** — `ChatSherpa.ask(...)` inside your own code.
-3. **Telegram bot** — mount handlers on a bot you already run, or use the
-   framework-agnostic `TelegramBridge.handle(...)`.
 
 This guide covers each of them, every option, and the login server that
 hands out sign-in links. The examples use placeholder names (`user_id=42`,
@@ -35,9 +33,7 @@ hands out sign-in links. The examples use placeholder names (`user_id=42`,
   - [Running several asks at once](#running-several-asks-at-once)
 - [Events, errors and webhooks](#events-errors-and-webhooks)
   - [Webhooks](#webhooks)
-- [Telegram bot](#telegram-bot)
   - [Commands the bot answers](#commands-the-bot-answers)
-  - [Mount on python-telegram-bot](#mount-on-python-telegram-bot)
   - [Mount on aiogram](#mount-on-aiogram)
   - [Use it with any framework](#use-it-with-any-framework)
   - [Notes](#notes)
@@ -79,7 +75,7 @@ Requires Python 3.9 or newer.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e ".[server,crypto,telegram]"   # extras are optional
+.venv/bin/pip install -e ".[server,crypto]"   # extras are optional
 .venv/bin/playwright install chromium                  # needed for ask, test, login
 ```
 
@@ -89,7 +85,6 @@ Extras:
 |---|---|---|
 | `server` | the login server (aiohttp) | running `chatsherpa serve` |
 | `crypto` | encryption at rest (cryptography) | setting `ENCRYPTION_KEY` |
-| `telegram` | python-telegram-bot | mounting handlers with `register(application)` |
 
 Check the environment at any time:
 
@@ -440,7 +435,7 @@ Methods:
 | Argument | Meaning |
 |---|---|
 | `provider` | `"chatgpt"`, `"grok"`, `"gemini"`, or `"deepseek"` |
-| `user_id` | str or int. Your end-user identifier, for example a Telegram user id. |
+| `user_id` | str or int. Your end-user identifier, for example an account name. |
 | `prompt` | the text to send |
 | `model` | preferred model name, matched against the picker |
 | `model_order` | list of fallback model names |
@@ -590,85 +585,6 @@ bridge.add_sink(WebhookSink("https://example.com/hooks/chatsherpa",
 
 By default only `error` events are sent. Pass `events=None` to send all of
 them.
-
----
-
-## Telegram bot
-
-The library never owns your bot. You mount ChatSherpa's handlers on the bot
-you already run, and the rest of your bot keeps working.
-
-### Commands the bot answers
-
-With the default prefix `ai`:
-
-| Message | Effect |
-|---|---|
-| `/ai <text>` | send `<text>` to the user's current provider |
-| any plain text | the same as `/ai <text>` |
-| `/ai_use <provider>` | set this user's default provider (`chatgpt`, `grok`, `gemini`, `deepseek`) |
-| `/ai_login <provider>` | send a sign-in link for that provider |
-| `/ai_status` | show which providers have a session for this user |
-| `/ai_chat` | list this user's saved chats, marking the current one with ▸ |
-| `/ai_chat <name>` | switch to a named chat. A new name starts a new chat on the next message. |
-
-The `/use` choice is kept in memory, so it resets when the process restarts.
-
-### Mount on python-telegram-bot
-
-```python
-from telegram.ext import ApplicationBuilder
-from chatsherpa import ChatSherpa, FileSessionStore
-from chatsherpa.integrations import TelegramBridge
-
-bridge = ChatSherpa(store=FileSessionStore("sessions"))
-tg = TelegramBridge(
-    bridge,
-    command_prefix="ai",                          # command names: /ai, /ai_login, ...
-    login_server_url="https://login.example.com", # where sign-in links come from
-    api_secret="shared-secret",                   # must match API_SECRET on the server
-    default_provider="chatgpt",
-    link_mode="live",                             # "live" or "connect" (see Login server)
-    connect_providers=("gemini",),                # providers that must use "connect"
-)
-
-application = ApplicationBuilder().token("123:your-bot-token").build()
-tg.register(application)
-application.run_polling()
-```
-
-`register` needs `python-telegram-bot` 21 or newer.
-
-### Mount on aiogram
-
-```python
-from aiogram import Dispatcher
-
-dp = Dispatcher()
-tg.register_aiogram(dp)     # aiogram v3 Dispatcher or Router
-```
-
-### Use it with any framework
-
-`handle` takes a user id and the text and returns the reply string. Use it
-from a webhook, a Discord bot, or a custom server:
-
-```python
-reply = await tg.handle(user_id=42, text="/ai Hello")
-```
-
-A message that starts with an unknown `/command` returns an empty string, so
-your own handlers can deal with it.
-
-### Notes
-
-- `command_prefix` puts every command under one prefix, so ChatSherpa does not
-  clash with your own handlers.
-- Each Telegram user has their own sessions, chats, and default provider.
-- The current chat is kept in memory, so it resets to `default` when the process
-  restarts. The chats themselves are saved and survive restarts. To pick the chat
-  from your own code instead, call `bridge.ask(..., chat="name")` from your own
-  handler instead of `tg.handle`.
 
 ---
 

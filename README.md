@@ -1,6 +1,6 @@
 # ChatSherpa
 
-Talk to **ChatGPT, Gemini, Grok and DeepSeek** from Python or a Telegram bot by
+Talk to **ChatGPT, Gemini, Grok and DeepSeek** from Python by
 driving their websites with a real browser session — no API keys. You log in
 once in a browser, ChatSherpa reuses that session headlessly to send prompts and
 return replies.
@@ -64,7 +64,7 @@ them. Gemini's several Google logins in one session use `ask --account N`.
 
 ## More
 
-- **Full guide: every command and option, the library, Telegram bots, login
+- **Full guide: every command and option, the library, login
   server, deployment** → [docs/GUIDE.md](docs/GUIDE.md)
 - **Short reference for sessions, the login server and deploys** →
   [docs/USAGE.md](docs/USAGE.md)

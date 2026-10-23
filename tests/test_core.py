@@ -356,27 +356,6 @@ async def test_signal_less_provider_uses_stability_window():
     assert 0.25 <= elapsed < 0.55, elapsed    # waited roughly the window
 
 
-def test_telegram_connect_mode_for_google():
-    from chatsherpa.integrations import TelegramBridge
-    tg = TelegramBridge(bridge=object(), connect_providers=("gemini",), link_mode="live")
-    assert tg._mode_for("gemini") == "connect"
-    assert tg._mode_for("chatgpt") == "live"
-
-
-async def test_telegram_handle_routes_ask(monkeypatch):
-    from chatsherpa.integrations import TelegramBridge
-
-    class FakeBridge:
-        async def ask(self, provider, uid, msg, **kw):
-            return f"{provider}:{msg}"
-        async def has_session(self, provider, uid):
-            return provider == "chatgpt"
-    tg = TelegramBridge(FakeBridge())
-    assert await tg.handle(1, "/ai hello") == "chatgpt:hello"
-    assert tg._do_use("1", "grok").lower().startswith("default")
-    assert await tg.handle(1, "plain text") == "grok:plain text"  # uses /use choice
-
-
 async def test_ingest_rejects_bad_token():
     from aiohttp.test_utils import TestClient, TestServer
     from chatsherpa.login.server import LoginServer
