@@ -292,11 +292,15 @@ async function capture(cfg) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === "chatsherpa-accounts") {
-    listGoogleAccounts().then((accounts) => sendResponse({ ok: true, accounts: accounts }));
+    listGoogleAccounts()
+      .then((accounts) => sendResponse({ ok: true, accounts: accounts }))
+      .catch((e) => sendResponse({ ok: false, error: String(e) }));
     return true;
   }
   if (msg && msg.type === "chatsherpa-capture") {
-    capture(msg.config).then(sendResponse);
+    capture(msg.config)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ ok: false, error: String(e) }));
     return true; // async response
   }
 });
