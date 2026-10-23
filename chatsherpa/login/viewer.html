@@ -230,7 +230,8 @@
     document.getElementById("typebar").classList.toggle("is-ready", on);
   }
   function openKeyboard(){ resetKb(); kb.focus({preventScroll:true}); }
-  function sync(){
+  // commit: the text has been sent and the bar is cleared. Not while the phone is still composing a word.
+  function sync(commit){
     // Compare with what the field showed last time, sentinel included: deleting the sentinel is a Backspace too.
     var prev=SENT+mirror, now=kb.value, p=0;
     while(p<prev.length && p<now.length && prev.charAt(p)===now.charAt(p)) p++;
@@ -239,11 +240,11 @@
     var text=now.charAt(0)===SENT ? now.slice(1) : now;
     if(now.charAt(0)!==SENT){ kb.value=SENT+text; try{kb.setSelectionRange(1,1);}catch(_){} }
     mirror=text;
+    if(commit || text.length>200){ resetKb(); }
     syncPh();
-    if(text.length>200){ resetKb(); }
   }
-  kb.addEventListener("input",function(){ sync(); });
-  kb.addEventListener("compositionend",function(){ sync(); });
+  kb.addEventListener("input",function(e){ sync(!(e.isComposing || e.inputType==="insertCompositionText")); });
+  kb.addEventListener("compositionend",function(){ sync(true); });
   kb.addEventListener("keydown",function(e){
     if(e.isComposing||done) return;
     if(isPasteKey(e)) return;   // the paste event brings in the text on this device
