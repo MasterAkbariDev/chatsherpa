@@ -63,6 +63,12 @@ def _store() -> FileSessionStore:
     return FileSessionStore(_sessions_dir(), encryption_key=_env().get("ENCRYPTION_KEY") or None)
 
 
+def headless_from_env(env) -> bool:
+    """The login server's browser mode. Headless by default. CHATSHERPA_HEADLESS=0 runs a headed
+    browser on a virtual display (Xvfb), which some providers' bot checks accept where headless is refused."""
+    return str(env.get("CHATSHERPA_HEADLESS", "1")).strip().lower() not in ("0", "false", "no")
+
+
 def _provider_config(headless: bool) -> ProviderConfig:
     """Browser settings from .env: an optional outbound proxy (e.g. http://127.0.0.1:10808)
     and an optional user agent. Both are used by every browser the CLI and server start."""
@@ -603,9 +609,10 @@ def cmd_serve(args) -> int:
     if env.get("WEBHOOK_URL"):
         bus.on(WebhookSink(env["WEBHOOK_URL"], secret=env.get("WEBHOOK_SECRET")))
     host = env.get("SERVER_HOST", "0.0.0.0"); port = int(env.get("SERVER_PORT", "8091"))
+    headless = headless_from_env(env)
     server = LoginServer(store=_store(), public_base_url=base, bus=bus,
-                         headless=True, api_secret=env.get("API_SECRET"),
-                         host=host, port=port, config=_provider_config(True))
+                         headless=headless, api_secret=env.get("API_SECRET"),
+                         host=host, port=port, config=_provider_config(headless))
     ui.banner("live-view login server")
     console.print(Panel(
         f"public url   [{ui.TEAL}]{base}[/]\n"
