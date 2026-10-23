@@ -1,4 +1,4 @@
-"""send() resends once when a message never shows up in the chat (no browser)."""
+"""send() never sends a prompt twice: it waits longer for a late message, then gives up (no browser)."""
 
 from types import SimpleNamespace
 
@@ -60,14 +60,14 @@ async def test_confirmed_send_is_not_resent():
     assert p.calls["waits"] == [p.SEND_CONFIRM_S]
 
 
-async def test_unconfirmed_send_is_resent_once_then_succeeds():
+async def test_late_message_is_waited_for_and_never_sent_twice():
     p = _provider(["timeout", "ok"])
     assert await p.send("hello") == "answer"
-    assert p.calls["fill"] == 2 and p.calls["submit"] == 2
-    assert p.calls["waits"] == [p.SEND_CONFIRM_S, None]
+    assert p.calls["fill"] == 1 and p.calls["submit"] == 1
+    assert p.calls["waits"] == [p.SEND_CONFIRM_S, p.SEND_CONFIRM_S * 2]
 
 
-async def test_send_that_never_registers_gives_up_after_one_resend():
+async def test_message_that_never_registers_is_not_sent_again():
     p = _provider(["timeout", "timeout"])
     raised = False
     try:
@@ -75,4 +75,4 @@ async def test_send_that_never_registers_gives_up_after_one_resend():
     except ResponseTimeoutError:
         raised = True
     assert raised
-    assert p.calls["submit"] == 2
+    assert p.calls["fill"] == 1 and p.calls["submit"] == 1

@@ -549,15 +549,15 @@ class BaseProvider:
         try:
             await self._wait_for_new_message(before, timeout_s=self.SEND_CONFIRM_S)
         except ResponseTimeoutError:
-            # Nothing new reached the chat, so the message did not register.
-            # Clear the composer and send once more; this cannot duplicate a
-            # message because the chat still has no new turn.
-            log.warning("[%s] message did not register (%s); sending once more",
+            # Nothing new yet. Never send the prompt again: a provider can take the first one late, and a
+            # second copy would make a second image or video. Wait longer for the first one, then give up.
+            log.warning("[%s] message not confirmed yet (%s); waiting longer, not resending",
                         self.name, await self._composer_state())
-            await self._clear_input()
-            await self._fill_input(prompt)
-            await self._submit()
-            await self._wait_for_new_message(before)
+            try:
+                await self._wait_for_new_message(before, timeout_s=self.SEND_CONFIRM_S * 2)
+            except ResponseTimeoutError:
+                log.warning("[%s] message did not register; not resent", self.name)
+                raise
         text = await self._wait_for_stable_response(on_text=on_text, on_status=on_status)
         result = (await self._assistant_markdown()) or text
         self._raise_if_busy(result)
