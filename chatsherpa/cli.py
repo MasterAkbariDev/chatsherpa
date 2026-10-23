@@ -429,7 +429,7 @@ async def cmd_grab(args) -> int:
     try:
         with console.status(f"[{style}]{hint}; waiting for login…", spinner="dots12"):
             state = await grab_session(provider_cls, cdp=args.cdp, profile=args.profile,
-                                       timeout_s=args.timeout)
+                                       timeout_s=args.timeout, channel=args.channel)
     except Exception as exc:
         ui.fail(f"grab failed: {exc}")
         if not args.cdp:
@@ -669,6 +669,8 @@ def build_parser() -> argparse.ArgumentParser:
     gb.add_argument("--server", help="login server base url (with --token)")
     gb.add_argument("--user", default="local", help="account label to store under (default: local)")
     gb.add_argument("--timeout", type=int, default=300)
+    gb.add_argument("--channel", default="chrome", choices=["chrome", "msedge"],
+                    help="installed browser for --profile: chrome (default) or msedge (Microsoft Edge)")
 
     im = sub.add_parser("import"); im.add_argument("provider", choices=provs)
     im.add_argument("source", help="cookie JSON file, storageState file, '-' for stdin, or a cookie header with --cookie-header")

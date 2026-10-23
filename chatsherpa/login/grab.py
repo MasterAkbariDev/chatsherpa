@@ -68,6 +68,7 @@ async def grab_session(
     headless: bool = False,
     timeout_s: int = 300,
     config: Optional[ProviderConfig] = None,
+    channel: str = "chrome",
 ) -> Dict[str, Any]:
     config = config or ProviderConfig()
     reg = _registrable(urlparse(provider_cls.home_url).hostname or "")
@@ -96,7 +97,7 @@ async def grab_session(
             profile = profile or str(Path.home() / ".chatsherpa" / f"{provider_cls.name}-profile")
             Path(profile).mkdir(parents=True, exist_ok=True)
             persistent = await pw.chromium.launch_persistent_context(
-                profile, channel="chrome", headless=headless)
+                profile, channel=channel, headless=headless)
             context = persistent
             page = context.pages[0] if context.pages else await context.new_page()
 

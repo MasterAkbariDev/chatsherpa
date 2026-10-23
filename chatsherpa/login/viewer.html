@@ -27,6 +27,11 @@
   .card p{margin:0;color:var(--soft);max-width:300px}
   .spin{width:40px;height:40px;border:3px solid var(--line);border-top-color:var(--teal);border-radius:50%;animation:sp .8s linear infinite}
   @keyframes sp{to{transform:rotate(360deg)}}
+  .kbtn{margin-left:auto;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--line);border:0;border-radius:999px;padding:6px 12px;cursor:pointer}
+  .kbtn:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+  header .status{margin-left:0}
+  /* Off-screen field that the phone keyboard attaches to. 16px stops iOS zooming in. */
+  #kb{position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;border:0;padding:0;margin:0;font-size:16px;pointer-events:none}
 </style>
 </head>
 <body>
@@ -34,10 +39,12 @@
     <span class="dot" id="livedot"></span>
     <span class="t">Secure login <small id="sub">connecting to __PROVIDER__…</small></span>
     <span class="status" id="status">●</span>
+    <button type="button" class="kbtn" id="kbtn">Keyboard</button>
   </header>
   <div class="stage" id="stage">
     <canvas id="screen" width="1280" height="800"></canvas>
     <div class="hint">One-time, encrypted session. Log in as you normally would — Google / 2FA all work.</div>
+    <input id="kb" type="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="send" aria-label="Type here to send keys to the browser">
     <div class="overlay show" id="overlay">
       <div class="card"><div class="spin"></div><p id="ovtext">Starting secure browser…</p></div>
     </div>
@@ -78,13 +85,42 @@
   function send(o){ if(ws&&ws.readyState===1&&!done) ws.send(JSON.stringify(o)); }
   var btn={0:"left",1:"middle",2:"right"};
   canvas.addEventListener("mousemove",function(e){var p=norm(e);send({t:"move",x:p.x,y:p.y});});
-  canvas.addEventListener("mousedown",function(e){e.preventDefault();var p=norm(e);send({t:"down",x:p.x,y:p.y,button:btn[e.button]||"left"});canvas.focus();});
+  canvas.addEventListener("mousedown",function(e){e.preventDefault();var p=norm(e);send({t:"down",x:p.x,y:p.y,button:btn[e.button]||"left"});canvas.focus();openKeyboard();});
   canvas.addEventListener("mouseup",function(e){var p=norm(e);send({t:"up",x:p.x,y:p.y,button:btn[e.button]||"left"});});
   canvas.addEventListener("contextmenu",function(e){e.preventDefault();});
   canvas.addEventListener("wheel",function(e){e.preventDefault();var p=norm(e);send({t:"wheel",x:p.x,y:p.y,dx:e.deltaX,dy:e.deltaY});},{passive:false});
   canvas.tabIndex=0;
+
+  // Touch: one finger is the mouse. A tap clicks and opens the keyboard; a drag moves or scrolls the page.
+  canvas.addEventListener("touchstart",function(e){e.preventDefault();var p=norm(e.touches[0]);send({t:"move",x:p.x,y:p.y});send({t:"down",x:p.x,y:p.y,button:"left"});},{passive:false});
+  canvas.addEventListener("touchmove",function(e){e.preventDefault();var p=norm(e.touches[0]);send({t:"move",x:p.x,y:p.y});},{passive:false});
+  canvas.addEventListener("touchend",function(e){e.preventDefault();var p=norm(e.changedTouches[0]);send({t:"up",x:p.x,y:p.y,button:"left"});openKeyboard();},{passive:false});
+
+  // Phone keyboards send text as input events, not keydown, so the text field below does the typing.
+  // It holds one space as a sentinel, so Backspace always changes it and shows up as a deletion.
+  var kb=document.getElementById("kb"), SENT=" ";
+  function resetKb(){ kb.value=SENT; try{kb.setSelectionRange(1,1);}catch(_){} }
+  function openKeyboard(){ resetKb(); kb.focus({preventScroll:true}); }
+  function flush(){
+    var v=kb.value; if(v.charAt(0)===SENT) v=v.slice(1);
+    for(var i=0;i<v.length;i++){ send({t:"char",text:v.charAt(i)}); }
+    resetKb();
+  }
+  kb.addEventListener("input",function(e){
+    if(e.isComposing) return;
+    if(e.inputType && e.inputType.indexOf("delete")===0){ send({t:"key",key:"Backspace"}); resetKb(); return; }
+    flush();
+  });
+  kb.addEventListener("compositionend",flush);
+  kb.addEventListener("keydown",function(e){
+    if(e.isComposing||done) return;
+    if(e.key==="Enter"||e.key==="Tab"||e.key==="Escape"||e.key.indexOf("Arrow")===0){ e.preventDefault(); send({t:"key",key:e.key}); }
+  });
+  document.getElementById("kbtn").addEventListener("click",openKeyboard);
+  resetKb();
+
   window.addEventListener("keydown",function(e){
-    if(done) return;
+    if(done || e.target===kb) return;
     if(e.key.length===1 && !e.ctrlKey && !e.metaKey){ send({t:"char",text:e.key}); e.preventDefault(); }
     else { send({t:"key",key:e.key}); if(["Tab","Enter","Backspace","ArrowUp","ArrowDown"].indexOf(e.key)>=0)e.preventDefault(); }
   });
