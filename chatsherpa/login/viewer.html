@@ -97,24 +97,29 @@
   canvas.addEventListener("touchend",function(e){e.preventDefault();var p=norm(e.changedTouches[0]);send({t:"up",x:p.x,y:p.y,button:"left"});openKeyboard();},{passive:false});
 
   // Phone keyboards send text as input events, not keydown, so the text field below does the typing.
-  // It holds one space as a sentinel, so Backspace always changes it and shows up as a deletion.
-  var kb=document.getElementById("kb"), SENT=" ";
-  function resetKb(){ kb.value=SENT; try{kb.setSelectionRange(1,1);}catch(_){} }
+  // Keyboards often rewrite the word they are still building (autocomplete, autocorrect, suggestions),
+  // so the field is not sent blindly: `mirror` is what the remote browser has received from this field,
+  // and each change sends only the difference. The field holds one space as a sentinel, so Backspace
+  // always changes it.
+  var kb=document.getElementById("kb"), SENT=" ", mirror="";
+  function resetKb(){ kb.value=SENT; mirror=""; try{kb.setSelectionRange(1,1);}catch(_){} }
   function openKeyboard(){ resetKb(); kb.focus({preventScroll:true}); }
-  function flush(){
-    var v=kb.value; if(v.charAt(0)===SENT) v=v.slice(1);
-    for(var i=0;i<v.length;i++){ send({t:"char",text:v.charAt(i)}); }
-    resetKb();
+  function sync(){
+    var text=kb.value.charAt(0)===SENT ? kb.value.slice(1) : kb.value;
+    var p=0; while(p<mirror.length && p<text.length && mirror.charAt(p)===text.charAt(p)) p++;
+    for(var i=p;i<mirror.length;i++){ send({t:"key",key:"Backspace"}); }
+    for(var j=p;j<text.length;j++){ var ch=text.charAt(j); if(ch==="\n") send({t:"key",key:"Enter"}); else send({t:"char",text:ch}); }
+    mirror=text;
+    if(text.length===0){ resetKb(); }
+    else if(text.length>200){ resetKb(); }
   }
-  kb.addEventListener("input",function(e){
-    if(e.isComposing) return;
-    if(e.inputType && e.inputType.indexOf("delete")===0){ send({t:"key",key:"Backspace"}); resetKb(); return; }
-    flush();
-  });
-  kb.addEventListener("compositionend",flush);
+  kb.addEventListener("input",function(){ sync(); });
+  kb.addEventListener("compositionend",function(){ sync(); });
   kb.addEventListener("keydown",function(e){
     if(e.isComposing||done) return;
-    if(e.key==="Enter"||e.key==="Tab"||e.key==="Escape"||e.key.indexOf("Arrow")===0){ e.preventDefault(); send({t:"key",key:e.key}); }
+    if(e.key==="Enter"||e.key==="Tab"||e.key==="Escape"||e.key.indexOf("Arrow")===0){
+      e.preventDefault(); send({t:"key",key:e.key}); resetKb();
+    }
   });
   document.getElementById("kbtn").addEventListener("click",openKeyboard);
   resetKb();
