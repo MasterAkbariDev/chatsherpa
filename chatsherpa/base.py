@@ -752,7 +752,9 @@ class BaseProvider:
     last_media: list = []
 
     #: Largest image we keep, and how many per reply.
-    MEDIA_MAX_BYTES = 2 * 1024 * 1024
+    MEDIA_MAX_BYTES = 8 * 1024 * 1024
+    #: A generated video is larger than a picture. The web app keeps to the same limits (chatsherpa-web src/lib/limits.ts).
+    MEDIA_MAX_VIDEO_BYTES = 40 * 1024 * 1024
     MEDIA_MAX_COUNT = 4
 
     _MEDIA_JS = r"""async (input) => {
@@ -760,8 +762,8 @@ class BaseProvider:
       const limits = input;
       if (!el) return [];
       const out = [];
-      const imgs = Array.from(el.querySelectorAll('img'))
-        .filter(i => Math.max(i.naturalWidth, i.width) >= 96 && Math.max(i.naturalHeight, i.height) >= 96);
+      const imgs = Array.from(el.querySelectorAll('img, video'))
+        .filter(i => i.tagName === 'VIDEO' || (Math.max(i.naturalWidth, i.width) >= 96 && Math.max(i.naturalHeight, i.height) >= 96));
       const readAsBase64 = (blob) => new Promise((resolve, reject) => {
         const r = new FileReader();
         r.onload = () => resolve(String(r.result).split(',')[1] || '');
@@ -783,7 +785,7 @@ class BaseProvider:
       };
       for (const img of imgs) {
         if (out.length >= limits.count) break;
-        if (img.naturalWidth > 0) {
+        if (img.tagName === 'IMG' && img.naturalWidth > 0) {
           try {
             const picture = fromPage(img);
             if (picture) { out.push({ mime: picture.mime, data: picture.data, alt: img.alt || '', index: img.getAttribute('data-cs-pic') }); continue; }
@@ -791,15 +793,18 @@ class BaseProvider:
             // Not readable from the page (cross-origin): fetched below.
           }
         }
-        const src = img.currentSrc || img.src;
+        const isVideo = img.tagName === 'VIDEO';
+        const src = isVideo ? (img.currentSrc || img.src || (img.querySelector('source') || {}).src || '') : (img.currentSrc || img.src);
         if (!src) continue;
         try {
           const res = await fetch(src, { credentials: 'include' });
           if (!res.ok) continue;
           const blob = await res.blob();
           const mime = (blob.type || '').split(';')[0];
-          if (!/^image\/(png|jpeg|webp|gif)$/.test(mime) || blob.size > limits.bytes) continue;
-          out.push({ mime, data: await readAsBase64(blob), alt: img.alt || '', index: img.getAttribute('data-cs-pic') });
+          const allowed = isVideo ? /^video\/(mp4|webm)$/ : /^image\/(png|jpeg|webp|gif)$/;
+          const limit = isVideo ? limits.videoBytes : limits.bytes;
+          if (!allowed.test(mime) || blob.size > limit) continue;
+          out.push({ mime, data: await readAsBase64(blob), alt: img.alt || (isVideo ? 'video' : ''), index: img.getAttribute('data-cs-pic') });
         } catch (e) {
           // A picture the page will not hand over (for example an expired link) is skipped.
         }
@@ -843,6 +848,10 @@ class BaseProvider:
           case 'ol': return '\n' + Array.from(node.children).map((li, i) => (i + 1) + '. ' + walk(li).trim()).join('\n') + '\n';
           case 'li': return kids();
           case 'a': { const h = node.getAttribute('href'); const t = kids().trim(); return h ? '[' + t + '](' + h + ')' : t; }
+          case 'video': {
+            if (node.hasAttribute('data-cs-pic')) return '![video](chatsherpa-picture:' + node.getAttribute('data-cs-pic') + ')';
+            return '';
+          }
           case 'img': {
             // A picture of the reply is marked where it sits in the text (see _REPLY_MD_JS).
             if (node.hasAttribute('data-cs-pic')) return '![' + (node.getAttribute('alt') || 'picture') + '](chatsherpa-picture:' + node.getAttribute('data-cs-pic') + ')';
@@ -902,7 +911,8 @@ class BaseProvider:
                 await handle.evaluate("el => el.querySelectorAll('img').forEach(i => i.scrollIntoView({block: 'center'}))")
                 found = await self.page.evaluate(
                     self._MEDIA_JS,
-                    {"el": handle, "count": self.MEDIA_MAX_COUNT, "bytes": self.MEDIA_MAX_BYTES},
+                    {"el": handle, "count": self.MEDIA_MAX_COUNT, "bytes": self.MEDIA_MAX_BYTES,
+                     "videoBytes": self.MEDIA_MAX_VIDEO_BYTES},
                 )
                 if found or time.monotonic() >= deadline:
                     return list(found or [])
@@ -924,14 +934,14 @@ class BaseProvider:
       const root = input.root;
       const big = (i) => Math.max(i.naturalWidth, i.width) >= 96 && Math.max(i.naturalHeight, i.height) >= 96;
       let k = 0;
-      for (const i of root.querySelectorAll('img')) {
+      for (const i of root.querySelectorAll('img, video')) {
         i.removeAttribute('data-cs-pic');
-        if (big(i)) i.setAttribute('data-cs-pic', String(k++));
+        if (i.tagName === 'VIDEO' || big(i)) i.setAttribute('data-cs-pic', String(k++));
       }
       const parts = [];
       const visit = (node) => {
         if (node.nodeType !== 1) return;
-        if (node.tagName === 'IMG') {
+        if (node.tagName === 'IMG' || node.tagName === 'VIDEO') {
           if (node.hasAttribute('data-cs-pic')) parts.push('![picture](chatsherpa-picture:' + node.getAttribute('data-cs-pic') + ')');
           return;
         }

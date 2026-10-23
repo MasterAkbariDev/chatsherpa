@@ -63,3 +63,24 @@ async def test_a_picture_that_cannot_be_read_takes_its_marker_with_it():
     text, media = await _read(html)
     assert text == "Before.\n\nAfter.\n\n![picture](chatsherpa-picture:0)"
     assert len(media) == 1
+
+
+async def test_a_video_is_kept_in_its_place_with_its_picture_marker():
+    # A video is a page element with a link to its file (here a data link); it takes its place in the reply's order.
+    from playwright.async_api import async_playwright
+    import base64 as b64
+    mp4_like = b64.b64encode(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64).decode()
+    html = f"""
+    <div class="model-response">
+      <div class="model-response-text"><p>Here is the video.</p></div>
+      <div class="generated-video"><video src="data:video/mp4;base64,{mp4_like}"></video></div>
+      <div class="model-response-text"><p>Enjoy.</p></div>
+    </div>"""
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.set_content(html)
+        prov = _Gemini.attach(page, ProviderConfig(headless=True))
+        markdown = await prov._assistant_markdown()
+        await browser.close()
+    assert markdown == "Here is the video.\n\n![picture](chatsherpa-picture:0)\n\nEnjoy."
