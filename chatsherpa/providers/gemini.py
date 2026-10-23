@@ -6,7 +6,9 @@ Always authenticate via a headful ``capture_session`` run, not auto_login.
 
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -48,6 +50,38 @@ class GeminiProvider(BaseProvider):
             return False
         path = urlparse(url).path
         return cls.is_conversation(url) or bool(_ENTRY.fullmatch(path))
+
+    #: Google's account button. It is on the page only when someone is signed in.
+    _SIGNED_IN = '[aria-label*="Google Account" i]'
+    #: A "Sign in" link. A signed-out Gemini page shows it next to the composer.
+    _SIGN_IN_WALL = 'a[href*="ServiceLogin"], a[href*="accounts.google.com/signin"], a:has-text("Sign in")'
+    #: How long a composer may sit next to a "Sign in" link before the session counts as signed out.
+    _WALL_GRACE_S = 4.0
+
+    async def is_logged_in(self) -> bool:
+        """Signed in means the composer is visible, Google's account button is on the page, and no
+        "Sign in" link is. A signed-out Gemini page also shows a composer, so the composer alone
+        is not a sign-in (the same false "connected" Grok had)."""
+        deadline = time.monotonic() + max(self.config.login_wait_ms, 60_000) / 1000
+        wall_since: float | None = None
+        while time.monotonic() < deadline:
+            try:
+                composer = self.page.locator(self.input_selector)
+                has_composer = bool(await composer.count()) and await composer.first.is_visible()
+                signed_in = bool(await self.page.locator(self._SIGNED_IN).count())
+                wall = bool(await self.page.locator(self._SIGN_IN_WALL).count())
+            except Exception:
+                has_composer, signed_in, wall = False, False, False
+            if has_composer and signed_in and not wall:
+                return True
+            if has_composer and wall:
+                wall_since = wall_since or time.monotonic()
+                if time.monotonic() - wall_since > self._WALL_GRACE_S:
+                    return False
+            else:
+                wall_since = None
+            await asyncio.sleep(0.4)
+        return False
 
     # Gemini's composer is a Quill contenteditable (`.ql-editor`). Enter submits.
     input_selector = "div.ql-editor[contenteditable='true']"
