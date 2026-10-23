@@ -37,7 +37,7 @@ def _provider(wait_results):
         if outcome == "timeout":
             raise ResponseTimeoutError("no new assistant message appeared")
 
-    async def stable():
+    async def stable(**kwargs):
         return "answer"
 
     async def markdown():

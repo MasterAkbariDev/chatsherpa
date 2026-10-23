@@ -43,7 +43,7 @@ def _provider(text, wait_outcome="timeout"):
     p._submit = submit
     p._wait_for_new_message = wait_new
     p._page_text = page_text
-    p._wait_for_stable_response = lambda: _ok()
+    p._wait_for_stable_response = lambda **kwargs: _ok()
     p._assistant_markdown = lambda: _ok()
     return p
 

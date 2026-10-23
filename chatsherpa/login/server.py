@@ -40,7 +40,28 @@ _VIEWER = Path(__file__).parent / "viewer.html"
 _CONNECT = Path(__file__).parent / "connect.html"
 
 
+def _failure(exc: Exception) -> tuple:
+    """HTTP status, error code and message for a failed ask. Shared by both ask routes."""
+    if isinstance(exc, LoginRequiredError):
+        return 401, "login_required", str(exc)
+    if isinstance(exc, BotChallengeError):
+        return 503, "bot_challenge", str(exc)
+    if isinstance(exc, BrowserUnavailableError):
+        return 503, "browser_unavailable", str(exc)
+    if isinstance(exc, ChatFullError):
+        return 409, "chat_full", str(exc)
+    if isinstance(exc, RateLimitedError):
+        return 429, "rate_limited", str(exc)
+    if isinstance(exc, ResponseTimeoutError):
+        return 504, "timeout", str(exc)
+    return 500, "failed", str(exc)
+
+
 class LoginServer:
+    #: Seconds of silence before a streamed ask sends a status heartbeat. Keeps proxies
+    #: from closing an idle connection while a provider thinks or searches.
+    STREAM_HEARTBEAT_S = 5.0
+
     def __init__(
         self,
         store,
@@ -158,11 +179,10 @@ class LoginServer:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response(info)
 
-    async def _h_api_ask(self, request):
-        """Send one prompt through the warm bridge and return the reply.
+    async def _read_ask(self, request) -> Any:
+        """Checks the secret and the body shared by both ask routes.
 
-        Body: ``{"provider", "prompt", "user_id"?, "chat"?, "new_chat"?, "model"?,
-        "model_order"?, "account"?}``. Reply: ``{"text", "model"}``.
+        Returns the body (with the provider name normalised), or the error response to send.
         """
         if self.api_secret and request.headers.get("X-ChatSherpa-Secret") != self.api_secret:
             return web.json_response({"error": "unauthorized"}, status=401)
@@ -174,6 +194,26 @@ class LoginServer:
         prompt = body.get("prompt")
         if provider not in REGISTRY or not isinstance(prompt, str) or not prompt.strip():
             return web.json_response({"error": "provider and prompt are required"}, status=400)
+        body["provider"] = provider
+        return body
+
+    async def _run_ask(self, body: dict, **callbacks) -> str:
+        return await self.bridge.ask(
+            body["provider"], str(body.get("user_id", "local")), body["prompt"],
+            model=body.get("model"), model_order=body.get("model_order"),
+            new_chat=bool(body.get("new_chat")), account=body.get("account"),
+            chat=body.get("chat") or "default", **callbacks,
+        )
+
+    async def _h_api_ask(self, request):
+        """Send one prompt through the warm bridge and return the reply.
+
+        Body: ``{"provider", "prompt", "user_id"?, "chat"?, "new_chat"?, "model"?,
+        "model_order"?, "account"?}``. Reply: ``{"text", "model", "media"}``.
+        """
+        body = await self._read_ask(request)
+        if isinstance(body, web.Response):
+            return body
         used = {"model": None, "media": []}
 
         def on_model(name):
@@ -183,28 +223,94 @@ class LoginServer:
             used["media"] = items
 
         try:
-            text = await self.bridge.ask(
-                provider, str(body.get("user_id", "local")), prompt,
-                model=body.get("model"), model_order=body.get("model_order"),
-                new_chat=bool(body.get("new_chat")), account=body.get("account"),
-                on_model=on_model, on_media=on_media, chat=body.get("chat") or "default",
-            )
-        except LoginRequiredError as exc:
-            return web.json_response({"error": "login_required", "message": str(exc)}, status=401)
-        except BotChallengeError as exc:
-            return web.json_response({"error": "bot_challenge", "message": str(exc)}, status=503)
-        except BrowserUnavailableError as exc:
-            return web.json_response({"error": "browser_unavailable", "message": str(exc)}, status=503)
-        except ChatFullError as exc:
-            return web.json_response({"error": "chat_full", "message": str(exc)}, status=409)
-        except RateLimitedError as exc:
-            return web.json_response({"error": "rate_limited", "message": str(exc)}, status=429)
-        except ResponseTimeoutError as exc:
-            return web.json_response({"error": "timeout", "message": str(exc)}, status=504)
+            text = await self._run_ask(body, on_model=on_model, on_media=on_media)
         except Exception as exc:  # noqa: BLE001 - report any provider failure to the caller
-            log.warning("ask failed: %s", exc)
-            return web.json_response({"error": "failed", "message": str(exc)}, status=500)
+            status, code, message = _failure(exc)
+            if code == "failed":
+                log.warning("ask failed: %s", exc)
+            return web.json_response({"error": code, "message": message}, status=status)
         return web.json_response({"text": text, "model": used["model"], "media": used["media"]})
+
+    async def _h_api_ask_stream(self, request):
+        """The same ask as ``/api/ask``, streamed as newline-delimited JSON.
+
+        Refusals before the reply starts (secret, body, provider) are plain JSON errors,
+        as on ``/api/ask``. After that, each line is one event:
+
+        * ``{"type": "status", "label", "elapsedMs"}``: "Working" or "Searching the Web".
+          Sent on every change and as a heartbeat every few seconds, so the connection
+          never sits idle.
+        * ``{"type": "text", "delta"}``: new Markdown for the reply. ``"replace"`` in place
+          of ``"delta"`` means the text changed other than by growing: discard what was shown.
+        * ``{"type": "done", "text", "model", "media"}``: the final reply, last line.
+        * ``{"type": "error", "status", "error", "message"}``: the failure, last line, in
+          place of done. ``status`` and ``error`` match ``/api/ask``.
+        """
+        body = await self._read_ask(request)
+        if isinstance(body, web.Response):
+            return body
+        started = time.monotonic()
+        events: asyncio.Queue = asyncio.Queue()
+        state = {"label": "Working", "model": None, "media": []}
+
+        def elapsed_ms() -> int:
+            return int((time.monotonic() - started) * 1000)
+
+        def on_status(label):
+            state["label"] = label
+            events.put_nowait({"type": "status", "label": label, "elapsedMs": elapsed_ms()})
+
+        def on_text(delta, replace=False):
+            events.put_nowait({"type": "text", "replace": delta} if replace else {"type": "text", "delta": delta})
+
+        def on_model(name):
+            state["model"] = name
+
+        def on_media(items):
+            state["media"] = items
+
+        async def run():
+            try:
+                text = await self._run_ask(body, on_model=on_model, on_media=on_media,
+                                           on_status=on_status, on_text=on_text)
+                events.put_nowait({"type": "done", "text": text, "model": state["model"], "media": state["media"]})
+            except Exception as exc:  # noqa: BLE001 - report any provider failure to the caller
+                status, code, message = _failure(exc)
+                if code == "failed":
+                    log.warning("ask failed: %s", exc)
+                events.put_nowait({"type": "error", "status": status, "error": code, "message": message})
+            finally:
+                events.put_nowait(None)
+
+        response = web.StreamResponse(headers={
+            "Content-Type": "application/x-ndjson",
+            # no-transform keeps proxies and gzip from holding the lines back.
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+        })
+        await response.prepare(request)
+        events.put_nowait({"type": "status", "label": "Working", "elapsedMs": 0})
+        task = asyncio.create_task(run())  # held here so it cannot be collected mid-ask
+
+        connected = True
+        while True:
+            try:
+                event = await asyncio.wait_for(events.get(), timeout=self.STREAM_HEARTBEAT_S)
+            except asyncio.TimeoutError:
+                event = {"type": "status", "label": state["label"], "elapsedMs": elapsed_ms()}
+            if event is None:
+                break
+            if connected:
+                try:
+                    await response.write((json.dumps(event) + "\n").encode())
+                except ConnectionError:
+                    # The browser went away. The ask still finishes, so the warm bridge is
+                    # left in a clean state, and the rest of the reply is simply not sent.
+                    connected = False
+        if connected:
+            await response.write_eof()
+        return response
 
     async def _h_connect(self, request):
         token = request.match_info["token"]
@@ -321,6 +427,7 @@ class LoginServer:
             web.post("/api/login", self._h_api_login),
             web.post("/api/ingest", self._h_ingest),
             web.post("/api/ask", self._h_api_ask),
+            web.post("/api/ask/stream", self._h_api_ask_stream),
             web.options("/api/ingest", self._h_options),
             web.get("/connect/{token}", self._h_connect),
             web.get("/login/{token}", self._h_viewer),
