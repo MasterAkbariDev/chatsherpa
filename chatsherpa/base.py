@@ -37,6 +37,13 @@ from .session import Session, SessionSource
 log = logging.getLogger("chatsherpa")
 
 _MORE_MODELS = re.compile(r"more models|see all models|show all", re.I)
+# A reply that only announces a picture, video or file that is still being made.
+_IMAGE_PENDING = re.compile(
+    r"^\s*(generating|creating|making|drawing|rendering)\s+(an?\s+|the\s+|your\s+)?"
+    r"(image|picture|photo|video|file)s?\b",
+    re.I,
+)
+
 _SKIP_MODEL = re.compile(
     r"^(premium|supergrok|upgrade\b.*|get\s.*|see\s.*|learn\s.*|try\s.*|subscribe.*|buy\s.*"
     r"|sign\s?(in|up).*|log\s?(in|out).*|settings|help|new chat|temporary chat|plans?|pricing"
@@ -562,6 +569,11 @@ class BaseProvider:
                 log.warning("[%s] message did not register; not resent", self.name)
                 raise
         text = await self._wait_for_stable_response(on_text=on_text, on_status=on_status)
+        # A reply that only says it is making a picture is not the answer yet: keep waiting for the picture.
+        deadline = time.monotonic() + self.IMAGE_WAIT_S
+        while _IMAGE_PENDING.match(text or "") and time.monotonic() < deadline:
+            await asyncio.sleep(3.0)
+            text = await self._wait_for_stable_response(on_text=on_text, on_status=on_status)
         result = (await self._assistant_markdown()) or text
         self._raise_if_busy(result)
         self.last_media = await self._capture_media()
@@ -809,6 +821,10 @@ class BaseProvider:
 
     #: Longest wait for a picture that is still loading when the text is done (images are made after the text).
     MEDIA_WAIT_S = 30.0
+    #: Longest wait for a reply that only says it is making a picture (for example "Generating image…").
+    IMAGE_WAIT_S = 120.0
+    #: Where the provider keeps its pictures, when they are outside the text block (None: the text block).
+    media_selector: Optional[str] = None
 
     async def _capture_media(self) -> list:
         """Images in the latest reply, fetched through the signed-in page. Never raises.
@@ -817,7 +833,7 @@ class BaseProvider:
         after), up to MEDIA_WAIT_S. A reply whose pictures are all loaded returns at once.
         """
         try:
-            loc = self.page.locator(self.assistant_message_selector).last
+            loc = self.page.locator(self.media_selector or self.assistant_message_selector).last
             if not await loc.count():
                 return []
             handle = await loc.element_handle()

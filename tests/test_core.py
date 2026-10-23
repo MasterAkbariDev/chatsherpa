@@ -380,3 +380,11 @@ def test_gemini_thinking_levels_are_not_models():
     # Gemini's Low / Medium / High dropdown is a thinking setting; the model list keeps "Thinking" (a Grok model).
     assert clean_model_labels(["2.5 Pro", "2.5 Flash", "Low", "Medium", "High", "Thinking"]) == [
         "2.5 Pro", "2.5 Flash", "Thinking"]
+
+
+def test_a_reply_that_only_announces_a_picture_is_recognised_as_pending():
+    from chatsherpa.base import _IMAGE_PENDING
+    assert _IMAGE_PENDING.match("Generating image…")
+    assert _IMAGE_PENDING.match("creating an image of a dog")
+    assert not _IMAGE_PENDING.match("Here is your photo of a dog.")
+    assert not _IMAGE_PENDING.match("The image shows a dog.")

@@ -90,6 +90,8 @@ class GeminiProvider(BaseProvider):
     send_button_selector = None  # Enter submits; the send button's label is localized
     # Responses render in <model-response>; the text sits in .model-response-text.
     assistant_message_selector = ".model-response-text"
+    # Pictures Gemini makes sit beside the text, inside the whole response.
+    media_selector = "model-response"
     streaming_indicator_selector = None  # Gemini's "Stop" button vanishes mid-stream, so it is unreliable.
     model_picker_selector = "bard-mode-switcher button, bard-mode-switcher"
 
