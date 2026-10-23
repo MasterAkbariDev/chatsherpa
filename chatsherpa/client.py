@@ -107,6 +107,10 @@ class ChatSherpa:
         try:
             async with lease as prov:
                 done = False
+                # Some providers open a chat's address only once its reply is under way, and not every one has it
+                # by the time the reply ends. So the address is saved as soon as it shows, while the reply is written.
+                page = getattr(prov, "page", None)
+                follow = asyncio.ensure_future(self._follow_thread(provider_cls, uid, page, chat)) if page else None
                 try:
                     text = await prov.send(prompt, model=model, model_order=model_order, on_model=on_model,
                                            on_text=on_text, on_status=on_status)
@@ -115,6 +119,8 @@ class ChatSherpa:
                         on_media(media)
                     done = True
                 finally:
+                    if follow is not None:
+                        follow.cancel()
                     # Keep the chat's address even when this reply failed: the provider may still finish it
                     # (an image can take half a minute after the text), and the next ask must continue it.
                     try:
@@ -170,6 +176,20 @@ class ChatSherpa:
                           headless=headless, timeout_s=timeout_s, config=self.config)
         await self.bus.emit(Event(EventType.LOGIN_SUCCEEDED, provider=provider_cls.name,
                                   user_id=str(user_id)))
+
+    async def _follow_thread(self, provider_cls, user_id: str, page, chat: str = DEFAULT_CHAT,
+                             every_s: float = 1.0) -> None:
+        """While a reply is written, keep the chat's address as soon as the page shows a conversation address."""
+        saved = None
+        while True:
+            try:
+                url = page.url
+                if provider_cls.is_conversation(url) and url != saved:
+                    await self.store.put_thread(user_id, provider_cls.name, url, chat)
+                    saved = url
+            except Exception:  # noqa: BLE001 - a page that is busy or closed is looked at again
+                pass
+            await asyncio.sleep(every_s)
 
     async def _remember_thread(self, provider_cls, user_id: str, page, chat: str = DEFAULT_CHAT,
                                wait_s: float = 3) -> None:

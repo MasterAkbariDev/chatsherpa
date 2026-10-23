@@ -294,6 +294,9 @@ class _ScriptedProvider:
     async def _is_streaming(self):
         return self._streaming
 
+    async def _has_picture(self):
+        return False  # the scripted replies are text only
+
 
 def _timing_cfg(**over):
     from chatsherpa.base import ProviderConfig

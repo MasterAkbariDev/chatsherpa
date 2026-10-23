@@ -1046,6 +1046,18 @@ class BaseProvider:
         """Provider hook: the latest turn has finished generating."""
         return False
 
+    async def _has_picture(self) -> bool:
+        """Whether the latest turn shows a picture that has finished loading. Icons are displayed small and do not count."""
+        try:
+            loc = self.page.locator(self.media_selector or self.assistant_message_selector).last
+            if not await loc.count():
+                return False
+            handle = await loc.element_handle()
+            return bool(await handle.evaluate(
+                "el => [...el.querySelectorAll('img')].some(i => i.complete && i.width >= 96 && i.height >= 96)"))
+        except Exception:  # noqa: BLE001 - a page that cannot be read has no picture
+            return False
+
     async def _wait_for_stable_response(self, on_text=None, on_status=None) -> str:
         """Wait until the newest assistant turn is genuinely finished, then return it.
 
@@ -1095,7 +1107,8 @@ class BaseProvider:
 
             now = time.monotonic()
             if self.has_ready_signal:
-                if text and await self._response_ready():
+                # A reply can be only a picture: a loaded picture in the turn counts as the answer.
+                if (text or await self._has_picture()) and await self._response_ready():
                     # Done-signal fired and the text is steady: settle and return.
                     if ready_since is None:
                         ready_since = now
