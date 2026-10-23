@@ -17,14 +17,23 @@ function reply(ok, error, extra) {
   }));
 }
 
+// Shown when the extension was reloaded or updated while this page was already open. Chrome
+// then cuts the page off from the extension, and only a page reload restores the link.
+const STALE_MESSAGE = "The ChatSherpa Connector was reloaded or updated. Reload this page, then try again.";
+
 function send(type, cfg, again, done) {
-  chrome.runtime.sendMessage({ type: type, config: cfg }, (resp) => {
-    const err = chrome.runtime.lastError;
-    // The worker may have been asleep and dropped the first message.
-    if (err && !again) return setTimeout(() => send(type, cfg, true, done), 400);
-    if (err) return done({ ok: false, error: err.message });
-    done(resp || { ok: false, error: "no response" });
-  });
+  try {
+    chrome.runtime.sendMessage({ type: type, config: cfg }, (resp) => {
+      const err = chrome.runtime.lastError;
+      // The worker may have been asleep and dropped the first message.
+      if (err && !again) return setTimeout(() => send(type, cfg, true, done), 400);
+      if (err) return done({ ok: false, error: err.message });
+      done(resp || { ok: false, error: "no response" });
+    });
+  } catch (e) {
+    // Thrown synchronously when the extension context is gone (reload or update).
+    done({ ok: false, error: STALE_MESSAGE });
+  }
 }
 
 window.addEventListener("chatsherpa:accounts", () => {
