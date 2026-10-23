@@ -20,10 +20,11 @@ class _Locator:
 
 
 class _Page:
-    def __init__(self, composer: bool, account: bool, sign_in: bool):
+    def __init__(self, composer: bool, account: bool, sign_in: bool, account_link: bool = False):
         self._map = {
             GeminiProvider.input_selector: composer,
             GeminiProvider._SIGNED_IN: account,
+            GeminiProvider._ACCOUNT_LINK: account_link,
             GeminiProvider._SIGN_IN_WALL: sign_in,
         }
 
@@ -57,3 +58,12 @@ async def test_guest_page_with_composer_and_sign_in_link_does_not_count():
 
 async def test_composer_alone_does_not_count():
     assert await _provider(_Page(composer=True, account=False, sign_in=False)).is_logged_in() is False
+
+
+async def test_account_link_alone_counts_when_the_button_is_translated():
+    # A Persian page labels the account button in Persian; the sign-out link is the same in every language.
+    assert await _provider(_Page(composer=True, account=False, sign_in=False, account_link=True)).is_logged_in() is True
+
+
+async def test_account_link_on_a_guest_page_with_a_sign_in_link_does_not_count():
+    assert await _provider(_Page(composer=True, account=False, sign_in=True, account_link=True)).is_logged_in() is False

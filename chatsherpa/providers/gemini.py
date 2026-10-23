@@ -51,12 +51,22 @@ class GeminiProvider(BaseProvider):
         path = urlparse(url).path
         return cls.is_conversation(url) or bool(_ENTRY.fullmatch(path))
 
-    #: Google's account button. It is on the page only when someone is signed in.
+    #: Google's account button. It is on the page only when someone is signed in. Its label is translated
+    #: (a Persian page does not say "Google Account"), so the link to Google's sign-out options is also checked:
+    #: that address is the same in every language.
     _SIGNED_IN = '[aria-label*="Google Account" i]'
-    #: A "Sign in" link. A signed-out Gemini page shows it next to the composer.
-    _SIGN_IN_WALL = 'a[href*="ServiceLogin"], a[href*="accounts.google.com/signin"], a:has-text("Sign in")'
+    _ACCOUNT_LINK = 'a[href*="accounts.google.com/SignOutOptions"]'
+    #: A link to Google's sign-in, by its address. A signed-out Gemini page shows it next to the composer.
+    #: Matched by address, not by text, because the words change with the page's language.
+    _SIGN_IN_WALL = 'a[href*="ServiceLogin"], a[href*="accounts.google.com/signin"]'
     #: How long a composer may sit next to a "Sign in" link before the session counts as signed out.
     _WALL_GRACE_S = 4.0
+
+    async def _has_account(self) -> bool:
+        """Google's account button, by its label or by its link: either one means someone is signed in."""
+        if await self.page.locator(self._SIGNED_IN).count():
+            return True
+        return bool(await self.page.locator(self._ACCOUNT_LINK).count())
 
     async def is_logged_in(self) -> bool:
         """Signed in means the composer is visible, Google's account button is on the page, and no
@@ -69,7 +79,7 @@ class GeminiProvider(BaseProvider):
             try:
                 composer = self.page.locator(self.input_selector)
                 has_composer = bool(await composer.count()) and await composer.first.is_visible()
-                signed_in = bool(await self.page.locator(self._SIGNED_IN).count())
+                signed_in = await self._has_account()
                 wall = bool(await self.page.locator(self._SIGN_IN_WALL).count())
             except Exception:
                 has_composer, signed_in, wall = False, False, False
@@ -90,7 +100,7 @@ class GeminiProvider(BaseProvider):
         try:
             composer = self.page.locator(self.input_selector)
             has_composer = bool(await composer.count()) and await composer.first.is_visible()
-            account = bool(await self.page.locator(self._SIGNED_IN).count())
+            account = await self._has_account()
             wall = bool(await self.page.locator(self._SIGN_IN_WALL).count())
         except Exception as exc:  # noqa: BLE001 - a page that cannot be read says so
             return f"the page could not be read ({str(exc)[:80]})"
