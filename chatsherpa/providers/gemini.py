@@ -62,7 +62,8 @@ class GeminiProvider(BaseProvider):
         """Signed in means the composer is visible, Google's account button is on the page, and no
         "Sign in" link is. A signed-out Gemini page also shows a composer, so the composer alone
         is not a sign-in (the same false "connected" Grok had)."""
-        deadline = time.monotonic() + max(self.config.login_wait_ms, 60_000) / 1000
+        # A signed-in Gemini page shows its composer within seconds; do not keep the person waiting longer.
+        deadline = time.monotonic() + max(self.config.login_wait_ms, 20_000) / 1000
         wall_since: float | None = None
         while time.monotonic() < deadline:
             try:
