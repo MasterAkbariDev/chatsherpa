@@ -357,7 +357,7 @@ class LoginServer:
     #: A connected answer is trusted this long; a not-connected one only briefly, so a new sign-in shows soon.
     LOGIN_CHECK_TTL_CONNECTED_S = 300.0
     LOGIN_CHECK_TTL_NOT_CONNECTED_S = 15.0
-    LOGIN_CHECK_TIMEOUT_S = 15.0
+    LOGIN_CHECK_TIMEOUT_S = 30.0
 
     async def _check_login(self, provider: str, user_id: str) -> bool:
         """Whether the provider accepts this user's saved session, checked in the server's browser.
