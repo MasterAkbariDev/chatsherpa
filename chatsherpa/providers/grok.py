@@ -41,19 +41,41 @@ class GrokProvider(BaseProvider):
     password_input_selector = 'input[type="password"]'
     password_submit_selector = 'button[type="submit"]'
 
-    async def is_logged_in(self) -> bool:
-        """Grok's SPA can take several seconds to hydrate (slower on a server),
-        and its pre-hydration shell briefly shows a /sign-in link. The composer
-        is the only reliable signal, so poll for it instead of failing early on
-        a transient wall."""
-        deadline = time.monotonic() + max(self.config.login_wait_ms, 60_000) / 1000
-        loc = self.page.locator(self.input_selector)
-        while time.monotonic() < deadline:
+    #: How long the composer and a "Sign in" wall may both be visible before we call the
+    #: session logged out. Grok shows the composer to logged-out visitors too, so the composer
+    #: alone is not a sign-in. A logged-in page drops the wall once the header hydrates.
+    _WALL_GRACE_S = 6.0
+
+    async def _login_wall_visible(self) -> bool:
+        for sel in self.login_wall_selectors:
             try:
+                loc = self.page.locator(sel)
                 if await loc.count() and await loc.first.is_visible():
                     return True
             except Exception:
                 pass
+        return False
+
+    async def is_logged_in(self) -> bool:
+        """Logged in means the composer is visible and no sign-in wall is. Grok's SPA hydrates
+        slowly on a server, so the wall can show briefly before the header renders. Poll until
+        the composer appears; then give the wall a grace period to clear before deciding."""
+        deadline = time.monotonic() + max(self.config.login_wait_ms, 60_000) / 1000
+        composer = self.page.locator(self.input_selector)
+        wall_since: float | None = None
+        while time.monotonic() < deadline:
+            try:
+                has_composer = bool(await composer.count()) and await composer.first.is_visible()
+            except Exception:
+                has_composer = False
+            if has_composer:
+                if not await self._login_wall_visible():
+                    return True
+                wall_since = wall_since or time.monotonic()
+                if time.monotonic() - wall_since > self._WALL_GRACE_S:
+                    return False
+            else:
+                wall_since = None
             await asyncio.sleep(0.4)
         return False
 
