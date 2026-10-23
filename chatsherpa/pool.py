@@ -154,6 +154,13 @@ class BrowserPool:
         ctx_kwargs: dict = {}
         if self.config.user_agent:
             ctx_kwargs["user_agent"] = self.config.user_agent
+        else:
+            # Headless Chromium's default user agent says "HeadlessChrome", which the
+            # providers' bot checks reject. Send the same string as desktop Chrome.
+            ctx_kwargs["user_agent"] = (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                f"Chrome/{self._browser.version} Safari/537.36"
+            )
         if self.config.locale:
             ctx_kwargs["locale"] = self.config.locale
         ctx_kwargs["viewport"] = self.config.viewport or {"width": 1280, "height": 800}
