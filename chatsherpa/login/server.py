@@ -75,16 +75,9 @@ class LoginServer:
         config: Optional[ProviderConfig] = None,
     ):
         self.store = store
-        # Which saved sessions have actually answered an ask. A stored session that the provider refuses
-        # (for example a Google session used from a server) is not "connected".
-        self._verified: dict = {}
-        store_dir = getattr(store, "dir", None)
-        self._verified_file = Path(store_dir) / "verified.json" if store_dir else None
-        if self._verified_file and self._verified_file.exists():
-            try:
-                self._verified = json.loads(self._verified_file.read_text("utf-8"))
-            except (OSError, ValueError):
-                self._verified = {}
+        # Real sign-in checks, cached: {"user:provider": (checked_at, signed_in)}.
+        self._login_checks: dict = {}
+        self._check_lock = asyncio.Lock()
         self.public_base_url = public_base_url.rstrip("/")
         self.bus = bus or EventBus()
         self.headless = headless
@@ -213,32 +206,13 @@ class LoginServer:
         body["provider"] = provider
         return body
 
-    def _mark_verified(self, user_id: str, provider: str, ok: bool) -> None:
-        key = f"{user_id}:{provider}"
-        if self._verified.get(key) == ok:
-            return
-        self._verified[key] = ok
-        if self._verified_file:
-            try:
-                self._verified_file.write_text(json.dumps(self._verified), "utf-8")
-            except OSError as exc:
-                log.warning("could not save the session status: %s", exc)
-
     async def _run_ask(self, body: dict, **callbacks) -> str:
-        user_id = str(body.get("user_id", "local"))
-        provider = body["provider"]
-        try:
-            text = await self.bridge.ask(
-                provider, user_id, body["prompt"],
-                model=body.get("model"), model_order=body.get("model_order"),
-                new_chat=bool(body.get("new_chat")), account=body.get("account"),
-                chat=body.get("chat") or "default", **callbacks,
-            )
-        except LoginRequiredError:
-            self._mark_verified(user_id, provider, False)
-            raise
-        self._mark_verified(user_id, provider, True)
-        return text
+        return await self.bridge.ask(
+            body["provider"], str(body.get("user_id", "local")), body["prompt"],
+            model=body.get("model"), model_order=body.get("model_order"),
+            new_chat=bool(body.get("new_chat")), account=body.get("account"),
+            chat=body.get("chat") or "default", **callbacks,
+        )
 
     async def _h_api_ask(self, request):
         """Send one prompt through the warm bridge and return the reply.
@@ -376,10 +350,45 @@ class LoginServer:
         user_id = str(body.get("user_id", "local"))
         session = await self.store.get(user_id, provider)
         stored = bool(session and not session.is_empty())
-        # Connected means a stored session has answered an ask. A stored one that has not, or that the
-        # provider refused, is not shown as connected.
-        signed_in = stored and self._verified.get(f"{user_id}:{provider}") is True
+        signed_in = await self._check_login(provider, user_id) if stored else False
         return web.json_response({"provider": REGISTRY[provider].name, "signed_in": signed_in, "stored": stored})
+
+    #: A connected answer is trusted this long; a not-connected one only briefly, so a new sign-in shows soon.
+    LOGIN_CHECK_TTL_CONNECTED_S = 300.0
+    LOGIN_CHECK_TTL_NOT_CONNECTED_S = 15.0
+
+    async def _check_login(self, provider: str, user_id: str) -> bool:
+        """Whether the provider accepts this user's saved session, checked in the server's browser.
+
+        The check opens the provider with the saved session and reads its sign-in state. Results are
+        cached briefly. A check that cannot run says not connected.
+        """
+        key = f"{user_id}:{provider}"
+        cached = self._login_checks.get(key)
+        if cached:
+            ttl = self.LOGIN_CHECK_TTL_CONNECTED_S if cached[1] else self.LOGIN_CHECK_TTL_NOT_CONNECTED_S
+            if time.monotonic() - cached[0] < ttl:
+                return cached[1]
+        async with self._check_lock:
+            cached = self._login_checks.get(key)
+            if cached and time.monotonic() - cached[0] < (
+                self.LOGIN_CHECK_TTL_CONNECTED_S if cached[1] else self.LOGIN_CHECK_TTL_NOT_CONNECTED_S
+            ):
+                return cached[1]
+            provider_cls = REGISTRY[provider]
+            signed_in = False
+            try:
+                session = await self.store.get(user_id, provider)
+                if session is not None and not session.is_empty():
+                    lease = await self.bridge.pool.lease(provider_cls, session, user_id,
+                                                         start_url=provider_cls.home_url)
+                    async with lease as prov:
+                        signed_in = bool(await prov.is_logged_in())
+            except Exception as exc:  # noqa: BLE001 - a check that cannot run is not connected
+                log.warning("sign-in check for %s could not run: %s", provider, exc)
+                signed_in = False
+            self._login_checks[key] = (time.monotonic(), signed_in)
+            return signed_in
 
     def _authorized(self, request) -> bool:
         return not self.api_secret or request.headers.get("X-ChatSherpa-Secret") == self.api_secret

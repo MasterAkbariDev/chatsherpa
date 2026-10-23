@@ -54,21 +54,41 @@ async def test_session_rejects_unknown_provider():
         await client.close()
 
 
-async def test_a_stored_session_is_connected_only_after_it_has_answered():
+async def test_a_stored_session_is_connected_when_the_provider_accepts_it():
     store = MemorySessionStore()
     await store.put("42", "chatgpt", SIGNED_IN_STATE)
     client, server = await _client(store=store)
+    calls = []
+
+    async def accepted(provider, user_id):
+        calls.append((provider, user_id))
+        return True
+
+    server._check_login = accepted
     try:
         resp = await client.post("/api/session", json={"provider": "ChatGPT", "user_id": "42"})
         assert resp.status == 200
-        # Stored but never used: not connected, since nothing shows the provider accepts it.
-        assert await resp.json() == {"provider": "chatgpt", "signed_in": False, "stored": True}
-        server._mark_verified("42", "chatgpt", True)
-        resp = await client.post("/api/session", json={"provider": "ChatGPT", "user_id": "42"})
         body = await resp.json()
         assert body == {"provider": "chatgpt", "signed_in": True, "stored": True}
+        assert calls == [("chatgpt", "42")]
         # Only the boolean leaves the server: no cookie or storage contents in the reply.
         assert COOKIE_VALUE not in await resp.text()
+    finally:
+        await client.close()
+
+
+async def test_a_stored_session_the_provider_refuses_is_not_connected():
+    store = MemorySessionStore()
+    await store.put("42", "chatgpt", SIGNED_IN_STATE)
+    client, server = await _client(store=store)
+
+    async def refused(provider, user_id):
+        return False
+
+    server._check_login = refused
+    try:
+        resp = await client.post("/api/session", json={"provider": "chatgpt", "user_id": "42"})
+        assert await resp.json() == {"provider": "chatgpt", "signed_in": False, "stored": True}
     finally:
         await client.close()
 
@@ -87,6 +107,11 @@ async def test_session_agrees_with_the_library_has_session():
     store = MemorySessionStore()
     await store.put("42", "gemini", SIGNED_IN_STATE)
     client, server = await _client(store=store)
+
+    async def refused(provider, user_id):
+        return False
+
+    server._check_login = refused
     try:
         for user_id in ("42", "43"):
             resp = await client.post("/api/session", json={"provider": "gemini", "user_id": user_id})
