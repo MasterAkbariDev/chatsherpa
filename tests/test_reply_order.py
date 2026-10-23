@@ -100,3 +100,46 @@ async def test_stopping_presses_the_providers_stop_button_when_it_is_shown():
         await page.set_content("<p>No reply is being written.</p>")
         assert await prov.stop_generating() is False
         await browser.close()
+
+
+async def test_a_picture_from_another_site_is_fetched_with_the_browsers_session():
+    # The picture is served from another address (another origin), so the page cannot read its pixels; the browser's
+    # own request, with its session, still gets it.
+    import http.server
+    import threading
+    from playwright.async_api import async_playwright
+
+    png = base64.b64decode(PNG_1x1)
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(png)))
+            self.end_headers()
+            self.wfile.write(png)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/cat.png"
+    html = f"""
+    <div class="model-response">
+      <div class="model-response-text"><p>Here.</p></div>
+      <div class="generated-image"><img width="200" height="200" src="{url}"></div>
+    </div>"""
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.set_content(html)
+            prov = _Gemini.attach(page, ProviderConfig(headless=True))
+            await prov._assistant_markdown()
+            media = await prov._capture_media()
+            await browser.close()
+    finally:
+        server.shutdown()
+    assert [m["mime"] for m in media] == ["image/png"]
+    assert base64.b64decode(media[0]["data"])[:4] == b"\x89PNG"

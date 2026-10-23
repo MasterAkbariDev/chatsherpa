@@ -9,6 +9,7 @@ a *stable* streamed response — lives here.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import re
 import time
@@ -201,6 +202,14 @@ class ProviderConfig:
     # account's picker labels; `chatsherpa models` reads those from the page.
     model: Optional[str] = None
     model_order: Optional[List[str]] = None
+
+
+def _in_reply_order(media: list) -> list:
+    """The pictures in the order the reply marks them."""
+    def key(picture):
+        index = picture.get("index")
+        return int(index) if index is not None and str(index).isdigit() else 1 << 30
+    return sorted(media, key=key)
 
 
 _PICTURE_MARKER = re.compile(r"!\[[^\]]*\]\(chatsherpa-picture:(\d+)\)")
@@ -891,6 +900,43 @@ class BaseProvider:
     #: Where the provider keeps its pictures, when they are outside the text block (None: the text block).
     media_selector: Optional[str] = None
 
+    #: The pictures and videos of the reply, in page order, with the numbers the reply text marks them by.
+    _MEDIA_LIST_JS = r"""(el) => [...el.querySelectorAll('img, video')]
+      .filter(i => i.hasAttribute('data-cs-pic'))
+      .map(i => ({
+        index: i.getAttribute('data-cs-pic'),
+        video: i.tagName === 'VIDEO',
+        alt: i.alt || '',
+        src: i.tagName === 'VIDEO' ? (i.currentSrc || i.src || (i.querySelector('source') || {}).src || '') : (i.currentSrc || i.src || ''),
+      }))"""
+
+    async def _fetch_outside_page(self, handle, have: set) -> list:
+        """The pictures of the reply that the page did not hand over, fetched through the browser's session."""
+        out = []
+        try:
+            candidates = await handle.evaluate(self._MEDIA_LIST_JS)
+        except Exception:  # noqa: BLE001 - nothing to add
+            return out
+        for item in candidates:
+            if item.get("index") in have or not item.get("src") or len(out) >= self.MEDIA_MAX_COUNT:
+                continue
+            try:
+                response = await self.page.context.request.get(item["src"], timeout=20_000)
+                if not response.ok:
+                    continue
+                mime = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
+                body = await response.body()
+                allowed = (mime.startswith("video/") and mime in ("video/mp4", "video/webm")) if item.get("video") else \
+                    mime in ("image/png", "image/jpeg", "image/webp", "image/gif")
+                limit = self.MEDIA_MAX_VIDEO_BYTES if item.get("video") else self.MEDIA_MAX_BYTES
+                if not allowed or len(body) > limit:
+                    continue
+                out.append({"mime": mime, "data": base64.b64encode(body).decode(), "alt": item.get("alt", ""),
+                            "index": item.get("index")})
+            except Exception as exc:  # noqa: BLE001 - a picture that cannot be fetched is left out
+                log.debug("[%s] picture not fetched: %s", self.name, exc)
+        return out
+
     async def _capture_media(self, expect_picture: bool = False) -> list:
         """Images in the latest reply, fetched through the signed-in page. Never raises.
 
@@ -915,14 +961,17 @@ class BaseProvider:
                      "videoBytes": self.MEDIA_MAX_VIDEO_BYTES},
                 )
                 if found or time.monotonic() >= deadline:
-                    return list(found or [])
+                    # A picture the page will not hand over (another site's, which the page cannot read) is fetched
+                    # with the browser's own session instead.
+                    outside = await self._fetch_outside_page(handle, {m.get("index") for m in (found or [])})
+                    return _in_reply_order(list(found or []) + outside)
                 # Still loading: a picture on the page that has no data yet (not decoded, or not started).
                 loading = await handle.evaluate(
                     "el => [...el.querySelectorAll('img')]"
                     ".filter(i => Math.max(i.width, i.naturalWidth) >= 96 && i.naturalWidth === 0).length"
                 )
                 if not loading and not expect_picture:
-                    return []
+                    return _in_reply_order(await self._fetch_outside_page(handle, set()))
                 await asyncio.sleep(1.0)
         except Exception as exc:  # noqa: BLE001 - a reply without pictures must still return
             log.debug("[%s] media capture skipped: %s", self.name, exc)

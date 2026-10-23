@@ -26,6 +26,8 @@ class GrokProvider(BaseProvider):
     send_button_selector = 'button[aria-label="Submit"]'
     # Assistant turns are left-aligned (.items-start); user turns are .items-end.
     assistant_message_selector = '.items-start .response-content-markdown'
+    # The reply as a whole: its text and its pictures and videos, which sit beside the text rather than in it.
+    media_selector = '.items-start:has(.response-content-markdown)'
     model_picker_selector = 'button[aria-label^="Model:"]'
     login_wall_selectors = [
         'a[href*="/sign-in"]',
