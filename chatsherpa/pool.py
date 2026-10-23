@@ -69,6 +69,7 @@ class BrowserPool:
         self._entries: Dict[Tuple[str, str], _Entry] = {}
         self._sem = asyncio.Semaphore(max_concurrency)
         self._start_lock = asyncio.Lock()
+        self._sweeper: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
         async with self._start_lock:
@@ -100,8 +101,22 @@ class BrowserPool:
                     "Chromium install (python -m playwright install chromium)."
                 ) from exc
             log.info("browser pool started (headless=%s)", launch_headless)
+            # Sweep idle contexts on a timer too: without it, the last browser of a quiet
+            # period keeps its renderer running (and the CPU busy) until the next request.
+            self._sweeper = asyncio.create_task(self._sweep_forever())
+
+    async def _sweep_forever(self) -> None:
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await self._drop_idle(keep=None)
+            except Exception as exc:  # noqa: BLE001 - keep sweeping
+                log.warning("idle sweep failed: %s", exc)
 
     async def close(self) -> None:
+        if self._sweeper is not None:
+            self._sweeper.cancel()
+            self._sweeper = None
         for entry in self._entries.values():
             try:
                 await entry.context.close()
