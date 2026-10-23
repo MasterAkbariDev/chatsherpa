@@ -223,6 +223,51 @@ class LoginServer:
         signed_in = bool(session and not session.is_empty())
         return web.json_response({"provider": REGISTRY[provider].name, "signed_in": signed_in})
 
+    def _authorized(self, request) -> bool:
+        return not self.api_secret or request.headers.get("X-ChatSherpa-Secret") == self.api_secret
+
+    async def _h_api_models(self, request):
+        """GET /api/models?provider=&user_id= -> {"models": [...]}. Reads the model menu of that user's account."""
+        if not self._authorized(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        provider = request.query.get("provider", "").lower()
+        user_id = request.query.get("user_id", "")
+        if provider not in REGISTRY or not user_id:
+            return web.json_response({"error": "provider and user_id are required"}, status=400)
+        try:
+            found = await self.bridge.list_models(provider, user_id)
+        except LoginRequiredError as exc:
+            return web.json_response({"error": "login_required", "message": str(exc)}, status=401)
+        except BotChallengeError as exc:
+            return web.json_response({"error": "bot_challenge", "message": str(exc)}, status=503)
+        except BrowserUnavailableError as exc:
+            return web.json_response({"error": "browser_unavailable", "message": str(exc)}, status=503)
+        except ResponseTimeoutError as exc:
+            return web.json_response({"error": "timeout", "message": str(exc)}, status=504)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("models failed: %s", exc)
+            return web.json_response({"error": "failed", "message": str(exc)}, status=500)
+        return web.json_response({"models": list(found.get("models") or [])})
+
+    async def _h_api_logout(self, request):
+        """POST /api/logout {"provider", "user_id"}: forget that user's saved login for one provider."""
+        if not self._authorized(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "bad json"}, status=400)
+        provider = str(body.get("provider", "")).lower()
+        user_id = str(body.get("user_id", ""))
+        if provider not in REGISTRY or not user_id:
+            return web.json_response({"error": "provider and user_id are required"}, status=400)
+        name = get_provider(provider).name
+        await self.bridge.store.delete(user_id, name)
+        await self.bridge.pool.drop(user_id, name)
+        await self.bus.emit(Event(EventType.LOGIN_SUCCEEDED, provider=name, user_id=user_id,
+                                  data={"via": "logout"}))
+        return web.json_response({"ok": True, "provider": name})
+
     async def _h_connect(self, request):
         token = request.match_info["token"]
         pending = self.broker.get(token)
@@ -339,6 +384,8 @@ class LoginServer:
             web.post("/api/ingest", self._h_ingest),
             web.post("/api/ask", self._h_api_ask),
             web.post("/api/session", self._h_api_session),
+            web.get("/api/models", self._h_api_models),
+            web.post("/api/logout", self._h_api_logout),
             web.options("/api/ingest", self._h_options),
             web.get("/connect/{token}", self._h_connect),
             web.get("/login/{token}", self._h_viewer),
