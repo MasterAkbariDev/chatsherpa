@@ -54,7 +54,8 @@ def _env() -> Dict[str, str]:
     e = dict(load_env(str(_env_path())))
     e.update({k: v for k, v in os.environ.items() if k in (
         "PUBLIC_BASE_URL", "SERVER_HOST", "SERVER_PORT", "API_SECRET", "API_KEY",
-        "WEBHOOK_URL", "WEBHOOK_SECRET", "ENCRYPTION_KEY", "CHATSHERPA_HEADLESS")})
+        "WEBHOOK_URL", "WEBHOOK_SECRET", "ENCRYPTION_KEY", "CHATSHERPA_HEADLESS",
+        "CHATSHERPA_PROXY", "CHATSHERPA_USER_AGENT")})
     return e
 
 
@@ -62,8 +63,18 @@ def _store() -> FileSessionStore:
     return FileSessionStore(_sessions_dir(), encryption_key=_env().get("ENCRYPTION_KEY") or None)
 
 
+def _provider_config(headless: bool) -> ProviderConfig:
+    """Browser settings from .env: an optional outbound proxy (e.g. http://127.0.0.1:10808)
+    and an optional user agent. Both are used by every browser the CLI and server start."""
+    env = _env()
+    proxy = env.get("CHATSHERPA_PROXY")
+    return ProviderConfig(headless=headless,
+                          proxy={"server": proxy} if proxy else None,
+                          user_agent=env.get("CHATSHERPA_USER_AGENT") or None)
+
+
 def _bridge(headless: bool = True) -> ChatSherpa:
-    return ChatSherpa(store=_store(), headless=headless)
+    return ChatSherpa(store=_store(), headless=headless, config=_provider_config(headless))
 
 
 def upsert_env(updates: Dict[str, str], path: str = ".env") -> None:
@@ -594,7 +605,7 @@ def cmd_serve(args) -> int:
     host = env.get("SERVER_HOST", "0.0.0.0"); port = int(env.get("SERVER_PORT", "8091"))
     server = LoginServer(store=_store(), public_base_url=base, bus=bus,
                          headless=True, api_secret=env.get("API_SECRET"),
-                         host=host, port=port)
+                         host=host, port=port, config=_provider_config(True))
     ui.banner("live-view login server")
     console.print(Panel(
         f"public url   [{ui.TEAL}]{base}[/]\n"

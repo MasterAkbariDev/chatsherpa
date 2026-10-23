@@ -78,14 +78,16 @@ class BrowserPool:
             # environment when it starts, so DISPLAY set afterwards never
             # reaches Chrome. Headless Chromium is stopped by Cloudflare here.
             launch_headless = self.headless
-            # Headed Chromium needs a display too: start Xvfb when none is set, for
-            # headless and headed runs alike (a no-op when DISPLAY is already set).
-            if self._display.start_if_needed():
+            # Only a headed run needs a display. Headed Chromium on Xvfb crashed at launch
+            # (SIGTRAP) on the VPS, while headless launches were reliable, so headless
+            # runs never start Xvfb.
+            if not self.headless and self._display.start_if_needed():
                 launch_headless = False
             try:
                 self._pw = await async_playwright().start()
                 self._browser = await self._pw.chromium.launch(
                     headless=launch_headless,
+                    proxy=self.config.proxy,  # type: ignore[arg-type]
                     args=[*self.config.launch_args, "--disable-blink-features=AutomationControlled"],
                     ignore_default_args=["--enable-automation"],
                 )
