@@ -95,8 +95,14 @@ class LoginServer:
         if self._browser:
             return
         self._pw = await async_playwright().start()
+        # The same proxy and launch options as the provider pool. Without the proxy a sign-in
+        # leaves from the server's own address, which some providers refuse (Gemini answers 403).
+        # The two memory flags keep each sign-in browser small: no shared-memory use, no GPU process.
         self._browser = await self._pw.chromium.launch(
             headless=self.headless,
+            proxy=self.config.proxy,  # type: ignore[arg-type]
+            args=[*self.config.launch_args, "--disable-blink-features=AutomationControlled",
+                  "--disable-dev-shm-usage", "--disable-gpu"],
             ignore_default_args=["--enable-automation"],
         )
 
