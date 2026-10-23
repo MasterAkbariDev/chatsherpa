@@ -312,6 +312,26 @@ class LoginServer:
             await response.write_eof()
         return response
 
+    async def _h_api_session(self, request):
+        """Whether a user is signed in to a provider. A store lookup only: no browser, no message sent.
+
+        Body: ``{"provider", "user_id"?}``. Reply: ``{"provider", "signed_in"}``.
+        """
+        if self.api_secret and request.headers.get("X-ChatSherpa-Secret") != self.api_secret:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        if not isinstance(body, dict):
+            return web.json_response({"error": "bad json"}, status=400)
+        provider = str(body.get("provider", "")).lower()
+        if provider not in REGISTRY:
+            return web.json_response({"error": "unknown provider"}, status=400)
+        session = await self.store.get(str(body.get("user_id", "local")), provider)
+        signed_in = bool(session and not session.is_empty())
+        return web.json_response({"provider": REGISTRY[provider].name, "signed_in": signed_in})
+
     async def _h_connect(self, request):
         token = request.match_info["token"]
         pending = self.broker.get(token)
@@ -428,6 +448,7 @@ class LoginServer:
             web.post("/api/ingest", self._h_ingest),
             web.post("/api/ask", self._h_api_ask),
             web.post("/api/ask/stream", self._h_api_ask_stream),
+            web.post("/api/session", self._h_api_session),
             web.options("/api/ingest", self._h_options),
             web.get("/connect/{token}", self._h_connect),
             web.get("/login/{token}", self._h_viewer),
