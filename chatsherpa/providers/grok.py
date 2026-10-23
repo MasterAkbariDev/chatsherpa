@@ -57,12 +57,25 @@ class GrokProvider(BaseProvider):
             await asyncio.sleep(0.4)
         return False
 
-    async def _after_load(self) -> None:
-        page = self.page
-        for text in ("Accept all", "Got it", "I agree"):
+    # Cookie banners cover the composer and its send button. Decline non-essential
+    # cookies first (the privacy-preserving choice), then accept as a fallback.
+    _CONSENT_LABELS = ("Reject all", "Reject", "Decline", "Only necessary",
+                       "Accept all", "Got it", "I agree")
+
+    async def _dismiss_consent(self) -> None:
+        for text in self._CONSENT_LABELS:
             try:
-                btn = page.get_by_role("button", name=text)
+                btn = self.page.get_by_role("button", name=text)
                 if await btn.count() and await btn.first.is_visible():
                     await btn.first.click(timeout=2_000)
+                    await asyncio.sleep(0.3)
             except Exception:
                 pass
+
+    async def _after_load(self) -> None:
+        await self._dismiss_consent()
+
+    async def _fill_input(self, text: str) -> None:
+        # The banner can appear after load; clear it right before typing.
+        await self._dismiss_consent()
+        await super()._fill_input(text)
