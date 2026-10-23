@@ -29,9 +29,14 @@
   .kbtn{margin-left:auto;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--line);border:0;border-radius:999px;padding:6px 12px;cursor:pointer}
   .kbtn:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
   header .status{margin-left:0}
-  #chk{margin-left:auto;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--line);border:0;border-radius:999px;padding:6px 12px;cursor:pointer}
+  /* The header keeps its buttons on one line on a phone: the title gives up the room, not the labels. */
+  header .t{min-width:0;flex:1 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  header .t small{overflow:hidden;text-overflow:ellipsis}
+  #chk,#kbtn{flex:none;white-space:nowrap;font:inherit;font-size:12.5px;font-weight:700;line-height:1.2;border:0;border-radius:999px;padding:7px 12px;cursor:pointer}
+  #chk{margin-left:0;color:#06201c;background:var(--teal)}
   #chk:disabled{opacity:.6;cursor:default}
-  #kbtn{margin-left:0}
+  #chk:focus-visible,#kbtn:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+  #kbtn{margin-left:0;color:var(--ink);background:var(--line)}
   /* Off-screen field that the phone keyboard attaches to. 16px stops iOS zooming in. */
   /* Controls for the page: navigation and the keys a phone or a mouse user needs. */
   .bar{display:flex;gap:6px;padding:8px 10px;overflow-x:auto;border-bottom:1px solid var(--line);background:var(--panel);-webkit-overflow-scrolling:touch}

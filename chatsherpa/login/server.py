@@ -80,6 +80,8 @@ class LoginServer:
         self._login_checks: dict = {}
         # One check at a time per provider (not per server), so the providers are checked side by side.
         self._check_locks: dict = {}
+        # Keys whose cached answer is being refreshed in the background.
+        self._refreshing: set = set()
         self.public_base_url = public_base_url.rstrip("/")
         self.bus = bus or EventBus()
         self.headless = headless
@@ -406,16 +408,37 @@ class LoginServer:
         """
         key = f"{user_id}:{provider}"
         cached = self._login_checks.get(key)
-        if cached:
-            ttl = self.LOGIN_CHECK_TTL_CONNECTED_S if cached[1] else self.LOGIN_CHECK_TTL_NOT_CONNECTED_S
-            if time.monotonic() - cached[0] < ttl:
-                return cached[1]
+        if cached is None:
+            # Nothing is known yet: the first answer has to wait for the browser check.
+            return await self._run_login_check(key, provider, user_id)
+        if self._stale(cached):
+            # Answer at once with the last result, and refresh it in the background. A browser check can take
+            # 30 seconds, and the page polls status, so it must never wait for one.
+            self._refresh_in_background(key, provider, user_id)
+        return cached[1]
+
+    def _stale(self, cached: tuple) -> bool:
+        ttl = self.LOGIN_CHECK_TTL_CONNECTED_S if cached[1] else self.LOGIN_CHECK_TTL_NOT_CONNECTED_S
+        return time.monotonic() - cached[0] >= ttl
+
+    def _refresh_in_background(self, key: str, provider: str, user_id: str) -> None:
+        if key in self._refreshing:
+            return
+        self._refreshing.add(key)
+
+        async def refresh():
+            try:
+                await self._run_login_check(key, provider, user_id)
+            finally:
+                self._refreshing.discard(key)
+
+        asyncio.ensure_future(refresh())
+
+    async def _run_login_check(self, key: str, provider: str, user_id: str) -> bool:
         lock = self._check_locks.setdefault(key, asyncio.Lock())
         async with lock:
             cached = self._login_checks.get(key)
-            if cached and time.monotonic() - cached[0] < (
-                self.LOGIN_CHECK_TTL_CONNECTED_S if cached[1] else self.LOGIN_CHECK_TTL_NOT_CONNECTED_S
-            ):
+            if cached is not None and not self._stale(cached):
                 return cached[1]
             provider_cls = REGISTRY[provider]
             signed_in = False
