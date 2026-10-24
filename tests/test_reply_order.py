@@ -143,3 +143,17 @@ async def test_a_picture_from_another_site_is_fetched_with_the_browsers_session(
         server.shutdown()
     assert [m["mime"] for m in media] == ["image/png"]
     assert base64.b64decode(media[0]["data"])[:4] == b"\x89PNG"
+
+
+async def test_a_picture_inside_a_button_keeps_its_place():
+    # Gemini shows a picture inside a button; the button is kept, because the picture is part of the reply.
+    html = f"""
+    <div class="model-response">
+      <div class="model-response-text"><p>Here is the photo:</p>
+        <button class="image-button"><img width="200" height="200" src="data:image/png;base64,{PNG_1x1}"></button>
+      </div>
+      <div class="model-response-text"><p>Enjoy.</p></div>
+    </div>"""
+    text, media = await _read(html)
+    assert text == "Here is the photo:\n\n![picture](chatsherpa-picture:0)\n\nEnjoy."
+    assert len(media) == 1

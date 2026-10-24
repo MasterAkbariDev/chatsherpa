@@ -828,7 +828,9 @@ class BaseProvider:
         if (node.nodeType !== 1) return '';
         const tag = node.tagName.toLowerCase();
         // Drop non-content chrome: code-block toolbars (Copy/Download), icons, etc.
-        if (tag === 'button' || tag === 'svg' || tag === 'style' || tag === 'script') return '';
+        // A button is chrome, except one that holds a picture of the reply (Gemini shows its pictures in one).
+        const holdsPicture = tag === 'button' && node.querySelector('[data-cs-pic]');
+        if ((tag === 'button' && !holdsPicture) || tag === 'svg' || tag === 'style' || tag === 'script') return '';
         if (node.getAttribute('role') === 'button' || node.getAttribute('aria-hidden') === 'true') return '';
         // Drop a provider's reasoning ("thinking") blocks: they are never part of the answer.
         // Only descendants are checked, so the reply's own root can never be dropped.
@@ -1017,7 +1019,9 @@ class BaseProvider:
             if await loc.count():
                 handle = await loc.element_handle()
                 md = await self.page.evaluate(self._REPLY_MD_JS, {"root": handle, "text": self.assistant_message_selector})
-                if md and md.strip():
+                # The page's indentation in front of a picture is not part of the reply.
+                md = re.sub(r"[ \t]+(!\[picture\]\(chatsherpa-picture:\d+\))", r"\1", md or "")
+                if md.strip():
                     return md.strip()
         except Exception:
             pass
