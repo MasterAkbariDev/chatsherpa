@@ -32,6 +32,11 @@ class ChatFullError(ProviderError):
     "Chat memory full"). Start a new chat instead of retrying this one."""
 
 
+class ChatStuckError(ProviderError):
+    """A saved chat stopped answering: its last message got no reply. The chat itself is not full; a new chat
+    works. Reported apart from ChatFullError, so the person is not told the chat is full."""
+
+
 class BotChallengeError(ProviderError):
     """The provider's bot check (for example Cloudflare's "Just a moment...") is
     blocking the browser. This is about the browser and its IP, not the login."""

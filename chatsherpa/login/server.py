@@ -28,6 +28,7 @@ from ..exceptions import (
     BotChallengeError,
     BrowserUnavailableError,
     ChatFullError,
+    ChatStuckError,
     LoginRequiredError,
     RateLimitedError,
     ResponseTimeoutError,
@@ -51,6 +52,8 @@ def _failure(exc: Exception) -> tuple:
         return 503, "browser_unavailable", str(exc)
     if isinstance(exc, ChatFullError):
         return 409, "chat_full", str(exc)
+    if isinstance(exc, ChatStuckError):
+        return 409, "chat_stuck", str(exc)
     if isinstance(exc, RateLimitedError):
         return 429, "rate_limited", str(exc)
     if isinstance(exc, ResponseTimeoutError):
