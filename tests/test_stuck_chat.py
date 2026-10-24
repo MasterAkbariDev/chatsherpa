@@ -3,7 +3,7 @@
 import pytest
 
 from chatsherpa import ChatSherpa, MemorySessionStore
-from chatsherpa.exceptions import ChatFullError, ResponseTimeoutError
+from chatsherpa.exceptions import ChatStuckError, ResponseTimeoutError
 
 
 class _Prov:
@@ -39,7 +39,7 @@ async def _bridge(with_saved_chat):
 
 async def test_saved_chat_without_reply_is_reported_as_stuck():
     bridge = await _bridge(with_saved_chat=True)
-    with pytest.raises(ChatFullError) as info:
+    with pytest.raises(ChatStuckError) as info:
         await bridge.ask("chatgpt", 42, "hi", chat="main")
     assert "stopped answering" in str(info.value)
 
