@@ -80,3 +80,15 @@ async def test_a_picture_whose_link_was_released_by_the_page_is_still_captured()
     found = await _capture(html, expect_picture=False)
     assert [m["mime"] for m in found] == ["image/png"]
     assert base64.b64decode(found[0]["data"])[:4] == b"\x89PNG"
+
+
+async def test_every_picture_of_a_reply_is_captured_not_only_the_first_loaded():
+    # The first picture is ready at once; the second loads two seconds later. Both must come back.
+    html = f"""
+    <div class="reply"><img id="a" width="200" height="200" src="data:image/png;base64,{PNG_1x1}">
+      <img id="b" width="200" height="200" src="http://127.0.0.1:9/late-{{}}.png"></div>
+    <script>
+      setTimeout(() => {{ document.getElementById('b').src = 'data:image/png;base64,{PNG_1x1}'; }}, 2000);
+    </script>"""
+    found = await _capture(html, expect_picture=True)
+    assert len(found) == 2

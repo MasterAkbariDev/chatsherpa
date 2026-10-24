@@ -586,6 +586,12 @@ class BaseProvider:
         before = await self._baseline_assistant_count()
 
         await self._fill_input(prompt)
+        if not await self._prompt_in_box(prompt):
+            # The typing did not land (the box was not ready). Nothing has been sent yet, so it is typed once more.
+            await asyncio.sleep(1.0)
+            await self._fill_input(prompt)
+            if not await self._prompt_in_box(prompt):
+                raise ResponseTimeoutError(f"[{self.name}] the message could not be typed into the box; nothing was sent.")
         await self._submit()
         try:
             await self._wait_for_new_message(before, timeout_s=self.SEND_CONFIRM_S)
@@ -764,7 +770,7 @@ class BaseProvider:
     MEDIA_MAX_BYTES = 8 * 1024 * 1024
     #: A generated video is larger than a picture. The web app keeps to the same limits (chatsherpa-web src/lib/limits.ts).
     MEDIA_MAX_VIDEO_BYTES = 40 * 1024 * 1024
-    MEDIA_MAX_COUNT = 4
+    MEDIA_MAX_COUNT = 8
 
     _MEDIA_JS = r"""async (input) => {
       const el = input.el;
@@ -962,17 +968,19 @@ class BaseProvider:
                     {"el": handle, "count": self.MEDIA_MAX_COUNT, "bytes": self.MEDIA_MAX_BYTES,
                      "videoBytes": self.MEDIA_MAX_VIDEO_BYTES},
                 )
-                if found or time.monotonic() >= deadline:
-                    # A picture the page will not hand over (another site's, which the page cannot read) is fetched
-                    # with the browser's own session instead.
-                    outside = await self._fetch_outside_page(handle, {m.get("index") for m in (found or [])})
-                    return _in_reply_order(list(found or []) + outside)
                 # Still loading: a picture on the page that has no data yet (not decoded, or not started).
                 loading = await handle.evaluate(
                     "el => [...el.querySelectorAll('img')]"
                     ".filter(i => Math.max(i.width, i.naturalWidth) >= 96 && i.naturalWidth === 0).length"
                 )
-                if not loading and not expect_picture:
+                # All the pictures are waited for: a reply's pictures load one after another, and an early return
+                # would leave the later ones out.
+                if (found and not loading) or time.monotonic() >= deadline:
+                    # A picture the page will not hand over (another site's, which the page cannot read) is fetched
+                    # with the browser's own session instead.
+                    outside = await self._fetch_outside_page(handle, {m.get("index") for m in (found or [])})
+                    return _in_reply_order(list(found or []) + outside)
+                if not found and not loading and not expect_picture:
                     return _in_reply_order(await self._fetch_outside_page(handle, set()))
                 await asyncio.sleep(1.0)
         except Exception as exc:  # noqa: BLE001 - a reply without pictures must still return
@@ -1068,6 +1076,17 @@ class BaseProvider:
             await self.page.keyboard.insert_text(text)
         else:
             await el.fill(text)
+
+    async def _prompt_in_box(self, prompt: str) -> bool:
+        """Whether the start of the prompt is in the message box. True when the box cannot be read."""
+        probe = re.sub(r"\s+", "", prompt).lower()[:12]
+        if not probe:
+            return True
+        try:
+            text = await self.page.locator(self.input_selector).last.evaluate("e => e.innerText || e.value || ''")
+        except Exception:  # noqa: BLE001 - a box that cannot be read is not judged
+            return True
+        return probe in re.sub(r"\s+", "", text or "").lower()
 
     async def _submit(self) -> None:
         if self.send_button_selector:
