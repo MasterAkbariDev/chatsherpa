@@ -157,32 +157,3 @@ async def test_a_picture_inside_a_button_keeps_its_place():
     text, media = await _read(html)
     assert text == "Here is the photo:\n\n![picture](chatsherpa-picture:0)\n\nEnjoy."
     assert len(media) == 1
-
-
-async def test_a_picture_drawn_after_the_text_is_in_its_place():
-    # The text is complete before the picture is drawn (Gemini draws the picture last). Capturing the pictures first
-    # and then reading the text puts the picture's marker where it belongs.
-    from playwright.async_api import async_playwright
-
-    html = """
-    <div class="model-response">
-      <div class="model-response-text"><p>Here is the photo:</p></div>
-      <div class="generated-image"></div>
-      <div class="model-response-text"><p>Enjoy.</p></div>
-    </div>
-    <script>
-      setTimeout(() => {
-        document.querySelector('.generated-image').innerHTML = '<img width="200" height="200" src="data:image/png;base64,%s">';
-      }, 1500);
-    </script>""" % PNG_1x1
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.set_content(html)
-        prov = _Gemini.attach(page, ProviderConfig(headless=True))
-        media = await prov._capture_media(expect_picture=True)
-        from chatsherpa.base import _renumber_pictures
-        markdown = await prov._assistant_markdown()
-        await browser.close()
-    text = _renumber_pictures(markdown, media)
-    assert text == "Here is the photo:\n\n![picture](chatsherpa-picture:0)\n\nEnjoy."

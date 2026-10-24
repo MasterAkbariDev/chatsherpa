@@ -609,11 +609,9 @@ class BaseProvider:
                 await asyncio.sleep(3.0)
                 text = await self._wait_for_stable_response(on_text=on_text, on_status=on_status)
                 pending = _IMAGE_PENDING.match(text or "")
-        # The pictures first: they are numbered as they are captured, and the text is read after, so the text marks the
-        # same pictures (a picture drawn after the words would otherwise be missing from the text).
-        self.last_media = await self._capture_media(expect_picture=bool(_PICTURE_REQUEST.search(prompt or "")))
         result = (await self._assistant_markdown()) or text
         self._raise_if_busy(result)
+        self.last_media = await self._capture_media(expect_picture=bool(_PICTURE_REQUEST.search(prompt or "")))
         result = _renumber_pictures(result, self.last_media)
         log.info("[%s] received %d chars", self.name, len(result))
         return result
@@ -904,16 +902,6 @@ class BaseProvider:
     #: Where the provider keeps its pictures, when they are outside the text block (None: the text block).
     media_selector: Optional[str] = None
 
-    #: Numbers the pictures and videos of the reply in page order (the numbers the reply text marks them by).
-    _MARK_PICTURES_JS = r"""(root) => {
-      let k = 0;
-      for (const i of root.querySelectorAll('img, video')) {
-        i.removeAttribute('data-cs-pic');
-        const big = Math.max(i.naturalWidth, i.width) >= 96 && Math.max(i.naturalHeight, i.height) >= 96;
-        if (i.tagName === 'VIDEO' || big) i.setAttribute('data-cs-pic', String(k++));
-      }
-    }"""
-
     #: The pictures and videos of the reply, in page order, with the numbers the reply text marks them by.
     _MEDIA_LIST_JS = r"""(el) => [...el.querySelectorAll('img, video')]
       .filter(i => i.hasAttribute('data-cs-pic'))
@@ -969,8 +957,6 @@ class BaseProvider:
             while True:
                 # Pictures are often loaded only once they reach the screen, so each one is brought into view first.
                 await handle.evaluate("el => el.querySelectorAll('img').forEach(i => i.scrollIntoView({block: 'center'}))")
-                # Number the pictures as they are now (a picture drawn later gets its number when it appears).
-                await handle.evaluate(self._MARK_PICTURES_JS)
                 found = await self.page.evaluate(
                     self._MEDIA_JS,
                     {"el": handle, "count": self.MEDIA_MAX_COUNT, "bytes": self.MEDIA_MAX_BYTES,
